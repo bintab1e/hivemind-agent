@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { gunzipSync } from 'node:zlib';
 import { buildCoverageScope } from './coverage-scope.mjs';
-import { assertFreshCheckout, encodeJsonBody, pendingBatches, retryableTelemetryRejection, selectCoverage, supportsGzipTelemetry } from './sync-agent.mjs';
+import { assertFreshCheckout, encodeJsonBody, pendingBatches, retryableTelemetryRejection, selectCoverage, supportsGzipTelemetry, validateCoverageSummary } from './sync-agent.mjs';
 
 test('coverage scope follows NFS includes and reports unavailable headers', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'hivemind-scope-'));
@@ -37,6 +37,8 @@ test('coverage upload excludes files outside the knfsd scope', () => {
   const selected = selectCoverage(lcov, report, ['fs/nfsd/'], 'C:\\audit');
   assert(!selected.lcov.includes('fs/other/'));
   assert.deepEqual(Object.keys(JSON.parse(selected.coverageJson).files), ['fs/nfsd/main.c']);
+  assert.deepEqual(validateCoverageSummary(selected.lcov, JSON.stringify({ files: 1, total_lines: 2, read_lines: 1 }), 'C:\\audit'), { files: 1, total_lines: 2, read_lines: 1 });
+  assert.throws(() => validateCoverageSummary(selected.lcov, JSON.stringify({ files: 1, total_lines: 2, read_lines: 0 }), 'C:\\audit'), /summary mismatch/);
 });
 
 test('telemetry compression is capability-gated and preserves the JSON body', async () => {

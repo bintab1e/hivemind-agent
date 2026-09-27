@@ -72,6 +72,18 @@ export function selectCoverage(lcov, coverageJson, scope, repoRoot) {
   return { lcov: scopedLcov, coverageJson: JSON.stringify(report) };
 }
 
+export function validateCoverageSummary(lcov, metaJson, repoRoot) {
+  const files = Object.values(parseLcov(lcov, repoRoot));
+  const actual = {
+    files: files.length,
+    total_lines: files.reduce((sum, file) => sum + file.eligible.length, 0),
+    read_lines: files.reduce((sum, file) => sum + file.read.length, 0),
+  };
+  const expected = JSON.parse(metaJson);
+  if (Object.keys(actual).some(key => actual[key] !== expected[key])) throw new Error(`agentcov LCOV/JSON summary mismatch: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  return actual;
+}
+
 export function validateConfig(config) {
   if (!config || typeof config !== 'object') throw new Error('Invalid agent config');
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(config.agent_id || '')) throw new Error('Invalid agent_id');
@@ -210,17 +222,20 @@ async function syncTelemetry(config, token, telemetry = {}) {
   try {
     const lcovPath = path.join(temporary, 'agentcov.info');
     const coveragePath = path.join(temporary, 'coverage.json');
+    const metaPath = path.join(temporary, 'coverage-meta.json');
     const scopePath = path.join(temporary, 'scope.json');
     await fs.writeFile(scopePath, JSON.stringify({ files: [...scope].sort(), missing_includes: [...missingIncludes].sort() }));
     const python = path.isAbsolute(config.agentcov_bin)
       ? path.join(path.dirname(config.agentcov_bin), process.platform === 'win32' ? 'python.exe' : 'python')
       : process.platform === 'win32' ? 'python' : 'python3';
-    await run(python, [path.join(agentDirectory, 'agentcov-scope-report.py'), '--root', config.repo_root, '--scope', scopePath, '--lcov', lcovPath, '--json', coveragePath], { cwd: config.repo_root });
-    const [lcov, coverageJson, progressMd] = await Promise.all([
+    await run(python, [path.join(agentDirectory, 'agentcov-scope-report.py'), '--root', config.repo_root, '--scope', scopePath, '--lcov', lcovPath, '--json', coveragePath, '--meta', metaPath], { cwd: config.repo_root });
+    const [lcov, coverageJson, coverageMeta, progressMd] = await Promise.all([
       fs.readFile(lcovPath, 'utf8'),
       fs.readFile(coveragePath, 'utf8'),
+      fs.readFile(metaPath, 'utf8'),
       fs.readFile(path.join(config.home, 'telemetry', 'progress', `${config.agent_id}.md`), 'utf8'),
     ]);
+    validateCoverageSummary(lcov, coverageMeta, config.repo_root);
     const batch = makeBatch({ agentId: config.agent_id, versionId: config.version_id, repoRoot: config.repo_root, commit, clean, generatedAt: timestamp(), lcov, coverageJson, progressMd, agentcovConfig });
     if (state.source_digest === batch.sourceDigest) return;
     const batchFolder = path.join(folder, batch.manifest.batch_id);

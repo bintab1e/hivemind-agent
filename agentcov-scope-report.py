@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scope", type=Path, required=True)
     parser.add_argument("--lcov", type=Path, required=True)
     parser.add_argument("--json", type=Path, required=True)
+    parser.add_argument("--meta", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -76,6 +77,11 @@ def main() -> int:
     finally:
         aggregate.list_project_files = original_inventory
 
+    # LCOV is the server's source of truth and needs the native per-line map.
+    # Write it before compacting the JSON-only representation below.
+    args.lcov.parent.mkdir(parents=True, exist_ok=True)
+    write_lcov(coverage, out=args.lcov, counts="binary")
+
     # Per-line attribution repeats the same event metadata for every line in a
     # range and made this checkout's scoped report exceed 50 MB.  The complete
     # read/search ranges retain that evidence and can reconstruct the omitted
@@ -92,9 +98,15 @@ def main() -> int:
         "files": len(scope),
         "missing_includes": missing_includes,
     }
-    args.lcov.parent.mkdir(parents=True, exist_ok=True)
-    write_lcov(coverage, out=args.lcov, counts="binary")
     write_json_atomic(coverage, args.json)
+    write_json_atomic(
+        {
+            "files": coverage["summary"]["files"],
+            "total_lines": coverage["summary"]["total_lines"],
+            "read_lines": coverage["summary"]["read_lines"],
+        },
+        args.meta,
+    )
     return 0
 
 
