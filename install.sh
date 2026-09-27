@@ -8,7 +8,15 @@ ROOT="${HIVEMIND_KERNEL_ROOT:-$HOME/workspace/knfsd}"
 
 [[ "$SERVER_URL" =~ ^https?://[^[:space:]]+$ ]] || { echo '서버 URL이 필요합니다. 서버의 manage.mjs가 출력한 설치 명령을 사용하세요.' >&2; exit 1; }
 [[ "$TRACK" == rc || "$TRACK" == mainline ]] || { echo '트랙은 rc 또는 mainline이어야 합니다.' >&2; exit 1; }
-for name in git curl tar xz sha256sum; do command -v "$name" >/dev/null || { echo "$name 설치가 필요합니다." >&2; exit 1; }; done
+if ! command -v git >/dev/null || ! command -v tar >/dev/null || ! command -v xz >/dev/null || ! command -v sha256sum >/dev/null; then
+  if command -v apt-get >/dev/null && command -v sudo >/dev/null; then
+    sudo apt-get update
+    sudo apt-get install -y git tar xz-utils coreutils ca-certificates
+  else
+    echo 'git, tar, xz, sha256sum을 설치한 뒤 다시 실행하세요.' >&2
+    exit 1
+  fi
+fi
 curl -fsS "$SERVER_URL/healthz" >/dev/null || { echo "서버에 연결할 수 없습니다: $SERVER_URL" >&2; exit 1; }
 
 if command -v node >/dev/null && node -e 'process.exit(process.platform === "linux" && Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
