@@ -128,6 +128,7 @@ if not kept_post:
     raise RuntimeError('agentcov PostToolUse hook was not installed')
 path.write_text(json.dumps(data, indent=2), encoding='utf-8')
 PY
+rm -f "$KERNEL_DIR/.agentcov/coverage.json"
 ```
 
 관리자에게 받은 **자기 ID 토큰 파일만** 배치합니다. 개인용 `agent/` 폴더 안에 토큰이 이미 있었다면 복사 단계가 생략됩니다. 관리자 토큰은 받지 않습니다.
@@ -306,6 +307,7 @@ foreach ($eventName in @('PreToolUse', 'Stop')) {
     else { $hooks.hooks.PSObject.Properties.Remove($eventName) }
 }
 [IO.File]::WriteAllText($hooksPath, ($hooks | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+Remove-Item -LiteralPath (Join-Path $kernel '.agentcov\coverage.json') -Force -ErrorAction SilentlyContinue
 ```
 
 관리자에게 받은 **이 ID의 토큰 파일**을 다운로드 폴더에서 복사하고 설정 파일을 만듭니다. 서버의 관리자 토큰은 필요하지 않습니다.

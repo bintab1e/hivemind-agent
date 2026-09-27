@@ -28,6 +28,9 @@ test('token configures the matching kernel checkout and project hooks', { skip: 
   const source = path.dirname(fileURLToPath(import.meta.url));
   const localOnly = new Set(['.git', '.local', '.venv', '__pycache__', 'runtime']);
   await cp(source, agent, { recursive: true, filter: entry => !localOnly.has(path.relative(source, entry).split(path.sep)[0]) });
+  await mkdir(path.join(root, '.agentcov'), { recursive: true });
+  await writeFile(path.join(root, '.agentcov', 'coverage.json'), '{"obsolete":true}\n');
+  await writeFile(path.join(root, '.agentcov', 'events.jsonl'), '{"event":"keep"}\n');
   await mkdir(path.join(agent, '.venv', 'bin'), { recursive: true });
   const agentcov = path.join(agent, '.venv', 'bin', 'agentcov');
   await writeFile(agentcov, '#!/bin/sh\nmkdir -p .codex\nprintf \'{"hooks":{"PostToolUse":[{"hooks":[{"command":"agentcov hook post-tool-use"}]}],"PreToolUse":[{"hooks":[{"command":"agentcov hook pre-tool-use"}]}],"Stop":[{"hooks":[{"command":"agentcov hook stop"},{"command":"echo keep-custom-stop"}]}]}}\' > .codex/hooks.json\n');
@@ -61,5 +64,7 @@ test('token configures the matching kernel checkout and project hooks', { skip: 
   assert.deepEqual(hookCommands.filter(command => command.includes('agentcov')), [`${agentcov} hook post-tool-use`]);
   assert.equal(hooks.hooks.PreToolUse, undefined);
   assert(hookCommands.includes('echo keep-custom-stop'));
+  await assert.rejects(readFile(path.join(root, '.agentcov', 'coverage.json')), { code: 'ENOENT' });
+  assert.equal(await readFile(path.join(root, '.agentcov', 'events.jsonl'), 'utf8'), '{"event":"keep"}\n');
   assert.equal((await readFile(path.join(agent, 'runtime', 'agents', 'jinpyo.token'), 'utf8')).trim(), token);
 });

@@ -71,6 +71,7 @@ function installHooks(root, agentcovBin) {
   const file = path.join(root, '.codex', 'hooks.json');
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
   fs.writeFileSync(file, `${JSON.stringify(retainRecordingHook(data, agentcovBin), null, 2)}\n`);
+  fs.rmSync(path.join(root, '.agentcov', 'coverage.json'), { force: true });
 }
 
 export function updateInstructions(root) {
