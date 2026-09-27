@@ -5,12 +5,15 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { isIP } from 'node:net';
+import { gzip } from 'node:zlib';
 import { parseLcov } from './contract.mjs';
 import { buildCoverageScope } from './coverage-scope.mjs';
 
 const run = promisify(execFile);
+const gzipAsync = promisify(gzip);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const timestamp = () => new Date().toISOString();
+const agentDirectory = path.dirname(fileURLToPath(import.meta.url));
 export const gitArgs = (repoRoot, args) => ['-c', `safe.directory=${repoRoot}`, ...args];
 export function assertFreshCheckout(prior, repoRoot, commit) {
   if (prior && prior.repo_commit !== commit && path.resolve(prior.repo_root).toLowerCase() === path.resolve(repoRoot).toLowerCase()) {
@@ -86,11 +89,32 @@ export function validateConfig(config) {
   return { ...config, server: server.origin, coverage_prefixes: prefixes, agentcov_bin: config.agentcov_bin || 'agentcov' };
 }
 
-async function post(config, token, endpoint, body) {
-  const response = await fetch(`${config.server}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
+export function supportsGzipTelemetry(health) {
+  return health?.telemetry?.content_encodings?.includes('gzip') === true;
+}
+
+export function retryableTelemetryRejection(error) {
+  return /^\/v1\/telemetry\/batches: (400 Invalid batch content|413 (Request too large|coverage\.json is too large))$/.test(error || '');
+}
+
+export async function encodeJsonBody(body, compress = false) {
+  const json = JSON.stringify(body);
+  if (!compress) return { body: json, headers: {} };
+  return { body: await gzipAsync(Buffer.from(json)), headers: { 'Content-Encoding': 'gzip' } };
+}
+
+async function post(config, token, endpoint, body, options = {}) {
+  const encoded = await encodeJsonBody(body, options.gzip === true);
+  const response = await fetch(`${config.server}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...encoded.headers }, body: encoded.body, signal: AbortSignal.timeout(30_000) });
   const result = await response.json();
   if (!response.ok) throw new Error(`${endpoint}: ${response.status} ${result.error || 'request failed'}`);
   return result;
+}
+
+async function syncHealth(config, token) {
+  const response = await fetch(`${config.server}/v1/sync/health`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
+  if (!response.ok) throw new Error(`Sync health returned ${response.status}`);
+  return response.json();
 }
 
 export async function syncExchange(config, token) {
@@ -126,38 +150,45 @@ export async function syncExchange(config, token) {
   }
 }
 
-async function pendingBatches(config, token) {
+export async function pendingBatches(config, token, telemetry = {}) {
   const folder = path.join(config.home, 'telemetry', 'batches', config.agent_id);
   const statePath = path.join(config.home, `sync-state-${config.agent_id}.json`);
   await fs.mkdir(folder, { recursive: true });
+  const batches = [];
   for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
     if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
     const batchFolder = path.join(folder, entry.name);
-    if (await fs.stat(path.join(batchFolder, 'ack.json')).catch(() => null) || await fs.stat(path.join(batchFolder, 'rejected.json')).catch(() => null)) continue;
-    const [manifestText, lcov, coverageJson, progressMd] = await Promise.all([
-      fs.readFile(path.join(batchFolder, 'manifest.json'), 'utf8'),
+    const manifest = JSON.parse(await fs.readFile(path.join(batchFolder, 'manifest.json'), 'utf8'));
+    batches.push({ name: entry.name, batchFolder, manifest });
+  }
+  batches.sort((a, b) => a.manifest.generated_at.localeCompare(b.manifest.generated_at));
+  for (const { name, batchFolder, manifest } of batches) {
+    if (await fs.stat(path.join(batchFolder, 'ack.json')).catch(() => null)) continue;
+    const rejectedPath = path.join(batchFolder, 'rejected.json');
+    const rejected = JSON.parse(await fs.readFile(rejectedPath, 'utf8').catch(() => 'null'));
+    if (rejected && !(telemetry.gzip && retryableTelemetryRejection(rejected.error))) continue;
+    const [lcov, coverageJson, progressMd] = await Promise.all([
       fs.readFile(path.join(batchFolder, 'agentcov.info'), 'utf8'),
       fs.readFile(path.join(batchFolder, 'coverage.json'), 'utf8'),
       fs.readFile(path.join(batchFolder, 'progress.md'), 'utf8'),
     ]);
-    const manifest = JSON.parse(manifestText);
     try {
-      const result = await post(config, token, '/v1/telemetry/batches', { manifest, lcov, coverage_json: coverageJson, progress_md: progressMd });
+      const result = await post(config, token, '/v1/telemetry/batches', { manifest, lcov, coverage_json: coverageJson, progress_md: progressMd }, { gzip: telemetry.gzip });
       await fs.writeFile(statePath, JSON.stringify({ source_digest: manifest.source_digest, batch_id: manifest.batch_id, at: timestamp() }, null, 2));
       await fs.writeFile(path.join(batchFolder, 'ack.json'), JSON.stringify({ result, at: timestamp() }, null, 2));
-      console.log(`Batch accepted: ${entry.name}`);
-      if (result.warnings?.length) console.warn(`Batch ${entry.name}: ${result.warnings.join(', ')}`);
+      console.log(`Batch accepted: ${name}`);
+      if (result.warnings?.length) console.warn(`Batch ${name}: ${result.warnings.join(', ')}`);
     } catch (error) {
       if (!/^\/v1\/telemetry\/batches: (400|413|422) /.test(error.message)) throw error;
       await fs.writeFile(path.join(batchFolder, 'rejected.json'), JSON.stringify({ error: error.message, at: timestamp() }, null, 2));
       await fs.writeFile(statePath, JSON.stringify({ source_digest: manifest.source_digest, batch_id: manifest.batch_id, rejected: true, at: timestamp() }, null, 2));
-      console.error(`${entry.name}: ${error.message}`);
+      console.error(`${name}: ${error.message}`);
     }
   }
 }
 
-async function syncTelemetry(config, token) {
-  await pendingBatches(config, token);
+async function syncTelemetry(config, token, telemetry = {}) {
+  await pendingBatches(config, token, telemetry);
   const { stdout: commitText } = await run('git', gitArgs(config.repo_root, ['rev-parse', 'HEAD']), { cwd: config.repo_root });
   const commit = commitText.trim();
   const folder = path.join(config.home, 'telemetry', 'batches', config.agent_id);
@@ -179,18 +210,17 @@ async function syncTelemetry(config, token) {
   try {
     const lcovPath = path.join(temporary, 'agentcov.info');
     const coveragePath = path.join(temporary, 'coverage.json');
-    await run(config.agentcov_bin, ['report', '--format', 'lcov', '--counts', 'binary', '--out', lcovPath], { cwd: config.repo_root });
-    await run(config.agentcov_bin, ['report', '--format', 'json', '--out', coveragePath], { cwd: config.repo_root });
-    const [fullLcov, fullCoverageJson, progressMd] = await Promise.all([
+    const scopePath = path.join(temporary, 'scope.json');
+    await fs.writeFile(scopePath, JSON.stringify({ files: [...scope].sort(), missing_includes: [...missingIncludes].sort() }));
+    const python = path.isAbsolute(config.agentcov_bin)
+      ? path.join(path.dirname(config.agentcov_bin), process.platform === 'win32' ? 'python.exe' : 'python')
+      : process.platform === 'win32' ? 'python' : 'python3';
+    await run(python, [path.join(agentDirectory, 'agentcov-scope-report.py'), '--root', config.repo_root, '--scope', scopePath, '--lcov', lcovPath, '--json', coveragePath], { cwd: config.repo_root });
+    const [lcov, coverageJson, progressMd] = await Promise.all([
       fs.readFile(lcovPath, 'utf8'),
       fs.readFile(coveragePath, 'utf8'),
       fs.readFile(path.join(config.home, 'telemetry', 'progress', `${config.agent_id}.md`), 'utf8'),
     ]);
-    const selected = selectCoverage(fullLcov, fullCoverageJson, scope, config.repo_root);
-    const report = JSON.parse(selected.coverageJson);
-    report.hivemind_scope.missing_includes = [...missingIncludes].sort();
-    const { lcov } = selected;
-    const coverageJson = JSON.stringify(report);
     const batch = makeBatch({ agentId: config.agent_id, versionId: config.version_id, repoRoot: config.repo_root, commit, clean, generatedAt: timestamp(), lcov, coverageJson, progressMd, agentcovConfig });
     if (state.source_digest === batch.sourceDigest) return;
     const batchFolder = path.join(folder, batch.manifest.batch_id);
@@ -199,7 +229,7 @@ async function syncTelemetry(config, token) {
     await fs.writeFile(path.join(temporary, 'coverage.json'), coverageJson);
     await fs.writeFile(path.join(temporary, 'progress.md'), progressMd);
     await fs.rename(temporary, batchFolder);
-    await pendingBatches(config, token);
+    await pendingBatches(config, token, telemetry);
     console.log(`Coverage scope: ${scope.size} files, ${missingIncludes.size} unavailable includes`);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
@@ -219,11 +249,10 @@ export async function startSyncAgent(configInput, token) {
   const telemetryTick = async () => {
     if (telemetryBusy) return;
     telemetryBusy = true;
-    try { await syncTelemetry(config, token); } catch (error) { console.error(error.message); }
     try {
-      const response = await fetch(`${config.server}/v1/sync/health`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) });
-      if (!response.ok) throw new Error(`Sync health returned ${response.status}`);
-    } catch (error) { console.error(`Sync health: ${error.message}`); }
+      const health = await syncHealth(config, token);
+      await syncTelemetry(config, token, { gzip: supportsGzipTelemetry(health) });
+    } catch (error) { console.error(`Telemetry sync: ${error.message}`); }
     finally { telemetryBusy = false; }
   };
   await exchangeTick();

@@ -24,7 +24,9 @@ test('token configures the matching kernel checkout and project hooks', { skip: 
   const root = path.join(temp, 'linux');
   const agent = path.join(root, '.hivemind', 'agent');
   await mkdir(root, { recursive: true });
-  await cp(path.dirname(fileURLToPath(import.meta.url)), agent, { recursive: true });
+  const source = path.dirname(fileURLToPath(import.meta.url));
+  const localOnly = new Set(['.git', '.local', '.venv', '__pycache__', 'runtime']);
+  await cp(source, agent, { recursive: true, filter: entry => !localOnly.has(path.relative(source, entry).split(path.sep)[0]) });
   await mkdir(path.join(agent, '.venv', 'bin'), { recursive: true });
   const agentcov = path.join(agent, '.venv', 'bin', 'agentcov');
   await writeFile(agentcov, '#!/bin/sh\nmkdir -p .codex\nprintf \'{"hooks":{"PostToolUse":[{"hooks":[{"command":"agentcov hook post-tool-use"}]}]}}\' > .codex/hooks.json\n');

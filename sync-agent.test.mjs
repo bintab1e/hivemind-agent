@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { gunzipSync } from 'node:zlib';
 import { buildCoverageScope } from './coverage-scope.mjs';
-import { assertFreshCheckout, selectCoverage } from './sync-agent.mjs';
+import { assertFreshCheckout, encodeJsonBody, pendingBatches, retryableTelemetryRejection, selectCoverage, supportsGzipTelemetry } from './sync-agent.mjs';
 
 test('coverage scope follows NFS includes and reports unavailable headers', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'hivemind-scope-'));
@@ -35,4 +37,44 @@ test('coverage upload excludes files outside the knfsd scope', () => {
   const selected = selectCoverage(lcov, report, ['fs/nfsd/'], 'C:\\audit');
   assert(!selected.lcov.includes('fs/other/'));
   assert.deepEqual(Object.keys(JSON.parse(selected.coverageJson).files), ['fs/nfsd/main.c']);
+});
+
+test('telemetry compression is capability-gated and preserves the JSON body', async () => {
+  assert.equal(supportsGzipTelemetry({ telemetry: { content_encodings: ['identity', 'gzip'] } }), true);
+  assert.equal(supportsGzipTelemetry({ ok: true }), false);
+  const payload = { coverage_json: 'x'.repeat(100_000) };
+  const encoded = await encodeJsonBody(payload, true);
+  assert.equal(encoded.headers['Content-Encoding'], 'gzip');
+  assert.deepEqual(JSON.parse(gunzipSync(encoded.body).toString('utf8')), payload);
+  assert.equal(retryableTelemetryRejection('/v1/telemetry/batches: 400 Invalid batch content'), true);
+  assert.equal(retryableTelemetryRejection('/v1/telemetry/batches: 413 Request too large'), true);
+  assert.equal(retryableTelemetryRejection('/v1/telemetry/batches: 400 Hash mismatch: coverage.json'), false);
+});
+
+test('gzip-capable servers receive and acknowledge a previously rejected batch', async t => {
+  const home = mkdtempSync(path.join(tmpdir(), 'hivemind-retry-'));
+  const batchId = 'a'.repeat(64);
+  const batchFolder = path.join(home, 'telemetry', 'batches', 'pc1', batchId);
+  mkdirSync(batchFolder, { recursive: true });
+  writeFileSync(path.join(batchFolder, 'manifest.json'), JSON.stringify({ batch_id: batchId, source_digest: 'source', generated_at: '2026-09-27T00:00:00Z' }));
+  writeFileSync(path.join(batchFolder, 'agentcov.info'), 'lcov');
+  writeFileSync(path.join(batchFolder, 'coverage.json'), '{"coverage":true}');
+  writeFileSync(path.join(batchFolder, 'progress.md'), 'progress');
+  writeFileSync(path.join(batchFolder, 'rejected.json'), JSON.stringify({ error: '/v1/telemetry/batches: 400 Invalid batch content' }));
+  let received;
+  const server = createServer((request, response) => {
+    const chunks = [];
+    request.on('data', chunk => chunks.push(chunk));
+    request.on('end', () => {
+      assert.equal(request.headers['content-encoding'], 'gzip');
+      received = JSON.parse(gunzipSync(Buffer.concat(chunks)).toString('utf8'));
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ accepted: true, batch_id: batchId, warnings: [] }));
+    });
+  }).listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });
+  await pendingBatches({ home, agent_id: 'pc1', server: `http://127.0.0.1:${server.address().port}` }, 'token', { gzip: true });
+  assert.equal(received.coverage_json, '{"coverage":true}');
+  assert.equal(JSON.parse(readFileSync(path.join(batchFolder, 'ack.json'), 'utf8')).result.accepted, true);
 });
