@@ -1,16 +1,16 @@
 # Hivemind 분석 에이전트 (Linux / Windows)
 
-이 `agent/` 폴더만 분석 PC에 복사하면 **stdio MCP 에이전트**(`mcp-agent.mjs`)와 **5분 간격 동기화 에이전트**(`sync-agent.mjs`)를 실행할 수 있습니다. `server/` 폴더와 서버의 DB는 필요하지 않습니다. 각 PC에는 Node.js 24 이상, Git, Python 3.11 이상, 별도 Linux 소스 체크아웃이 필요합니다. [agentcov](https://github.com/trailofbits/agentcov#install)는 **각 분석 PC**에 따로 설치합니다.
+이 `hivemind-agent` 저장소를 분석 PC에 설치하면 **stdio MCP 에이전트**(`mcp-agent.mjs`)와 **5분 간격 동기화 에이전트**(`sync-agent.mjs`)를 실행할 수 있습니다. 중앙 서버는 별도 [`hivemind-server`](https://github.com/bintab1e/hivemind-server) 저장소에서 실행합니다. 각 PC에는 Node.js 24 이상, Git, Python 3.11 이상, 별도 Linux 소스 체크아웃이 필요합니다. [agentcov](https://github.com/trailofbits/agentcov#install)는 **각 분석 PC**에 따로 설치합니다.
 
-서버 운영자에게 **서버 접속 주소(직접 연결 시 내부 IP, 터널 사용 시 SSH 주소와 계정), `agent_id`, `track_id`(`rc` 또는 `mainline`), `version_id`, 등록된 40자리 Git SHA, 그 ID의 `.token` 파일**을 받습니다. 토큰은 별도 파일로 받거나 본인에게만 전달된 `agent/runtime/agents/<agent-id>.token`에 포함돼 있어도 됩니다. 첫 PC라면 소스를 받은 뒤 SHA를 관리자에게 보내고 대상 등록·토큰 발급이 끝난 후 계속합니다. `mainline`은 stable 릴리스의 내부 ID입니다. 다른 LLM과 소스 체크아웃이나 `.agentcov/`를 공유하지 마세요.
+서버 운영자에게 **서버 접속 주소(직접 연결 시 내부 IP, 터널 사용 시 SSH 주소와 계정), `agent_id`, `track_id`(`rc` 또는 `mainline`), `version_id`, 등록된 40자리 Git SHA, 그 ID의 `.token` 파일**을 받습니다. 토큰은 별도 파일로 받거나 본인에게만 전달된 `runtime/agents/<agent-id>.token`에 포함돼 있어도 됩니다. 첫 PC라면 소스를 받은 뒤 SHA를 관리자에게 보내고 대상 등록·토큰 발급이 끝난 후 계속합니다. `mainline`은 stable 릴리스의 내부 ID입니다. 다른 LLM과 소스 체크아웃이나 `.agentcov/`를 공유하지 마세요.
 
 ## Linux 분석 PC
 
-아래 명령에서 받은 폴더 경로와 서버가 알려 준 ID·버전을 바꿉니다. **같은 터미널 1**에서 순서대로 실행합니다. 받은 `agent/` 폴더만 `~/hivemind-agent`에 복사합니다.
+아래 명령에서 받은 폴더 경로와 서버가 알려 준 ID·버전을 바꿉니다. **같은 터미널 1**에서 순서대로 실행합니다. 받은 `hivemind-agent` 폴더를 `~/hivemind-agent`에 복사합니다.
 
 ```bash
 set -euo pipefail
-RECEIVED_AGENT_DIR="$HOME/Downloads/agent"
+RECEIVED_AGENT_DIR="$HOME/Downloads/hivemind-agent"
 AGENT_DIR="$HOME/hivemind-agent"
 test -f "$RECEIVED_AGENT_DIR/mcp-agent.mjs"
 mkdir -p "$AGENT_DIR"
@@ -222,11 +222,11 @@ git --version
 ssh -V
 ```
 
-받은 `agent/` 폴더가 다운로드 폴더에 있다고 가정합니다. 다른 위치라면 `$receivedAgentDir`만 바꿉니다. `C:\work\hivemind-agent`에는 이 폴더의 내용만 놓습니다.
+받은 `hivemind-agent` 폴더가 다운로드 폴더에 있다고 가정합니다. 다른 위치라면 `$receivedAgentDir`만 바꿉니다. `C:\work\hivemind-agent`에는 이 폴더의 내용만 놓습니다.
 
 ```powershell
 $agentDir = 'C:\work\hivemind-agent'
-$receivedAgentDir = Join-Path $HOME 'Downloads\agent'
+$receivedAgentDir = Join-Path $HOME 'Downloads\hivemind-agent'
 $kernel = 'C:\work\linux-rc-pc01'
 $agentId = 'pc01-codex'
 $track = 'rc'

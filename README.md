@@ -6,7 +6,7 @@ Linux/WSL에서 명령 **한 줄**로 설치합니다. 커널 소스가 `~/works
 curl -fsSL https://raw.githubusercontent.com/bintab1e/hivemind-agent/main/install.sh | bash
 ```
 
-설치기는 `192.168.1.188:8765` 서버에 연결해 커널 커밋이 등록된 `rc` 또는 `mainline` 대상인지 확인합니다. 서버와 같은 내부망에서 실행하고 서버 IP를 `192.168.1.188`로 유지하세요. 사전에 필요한 도구는 `curl`과 `git`입니다. 설치기가 Node.js 24, Python 3.11, agentcov를 사용자 폴더에 설치하며 `sudo`는 사용하지 않습니다.
+설치기는 [`hivemind-server`](https://github.com/bintab1e/hivemind-server)가 실행 중인 `192.168.1.188:8765`에 연결해 커널 커밋이 등록된 `rc` 또는 `mainline` 대상인지 확인합니다. 서버와 같은 내부망에서 실행하고 서버 IP를 `192.168.1.188`로 유지하세요. 사전에 필요한 도구는 `curl`과 `git`입니다. 설치기가 Node.js 24, Python 3.11, agentcov를 사용자 폴더에 설치하며 `sudo`는 사용하지 않습니다.
 
 설치기는 이 저장소를 커널 체크아웃의 `.hivemind/agent`에 받고, agentcov와 프로젝트별 Codex 훅·MCP 설정, 분석 진행 파일, 5분 동기화 서비스를 구성합니다. WSL에서 systemd 사용자 서비스가 없으면 현재 WSL 세션의 백그라운드 프로세스로 동기화합니다. Codex를 새로 열 때 프로젝트와 훅을 신뢰해야 실제 열람 기록이 시작됩니다.
 
