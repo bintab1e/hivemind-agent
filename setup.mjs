@@ -38,14 +38,39 @@ function saveCodexConfig(root, configPath) {
   fs.writeFileSync(file, `${lines.join('\n').trimEnd()}\n\n${section}`);
 }
 
+const agentcovHookAction = command => typeof command === 'string'
+  ? /(?:^|[/\\])agentcov(?:\.exe)?\s+hook\s+(post-tool-use|pre-tool-use|stop)\s*$/.exec(command.trim())?.[1]
+  : undefined;
+
+export function retainRecordingHook(data, agentcovBin) {
+  let recordingHookFound = false;
+  for (const [eventName, groups] of Object.entries(data.hooks || {})) {
+    if (!Array.isArray(groups)) continue;
+    const keptGroups = [];
+    for (const group of groups) {
+      if (!Array.isArray(group.hooks)) { keptGroups.push(group); continue; }
+      const hooks = [];
+      for (const hook of group.hooks) {
+        const action = agentcovHookAction(hook.command);
+        if (!action) { hooks.push(hook); continue; }
+        if (eventName !== 'PostToolUse' || action !== 'post-tool-use' || recordingHookFound) continue;
+        hooks.push({ ...hook, command: `${agentcovBin} hook post-tool-use` });
+        recordingHookFound = true;
+      }
+      if (hooks.length) keptGroups.push({ ...group, hooks });
+    }
+    if (keptGroups.length) data.hooks[eventName] = keptGroups;
+    else delete data.hooks[eventName];
+  }
+  if (!recordingHookFound) throw new Error('agentcov PostToolUse hook was not installed');
+  return data;
+}
+
 function installHooks(root, agentcovBin) {
   execFileSync(agentcovBin, ['install-codex-hooks', '--repo'], { cwd: root, stdio: 'inherit' });
   const file = path.join(root, '.codex', 'hooks.json');
   const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-  for (const groups of Object.values(data.hooks)) for (const group of groups) for (const hook of group.hooks) {
-    if (hook.command?.startsWith('agentcov hook ')) hook.command = hook.command.replace('agentcov', agentcovBin);
-  }
-  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+  fs.writeFileSync(file, `${JSON.stringify(retainRecordingHook(data, agentcovBin), null, 2)}\n`);
 }
 
 export function updateInstructions(root) {

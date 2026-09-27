@@ -30,7 +30,7 @@ test('token configures the matching kernel checkout and project hooks', { skip: 
   await cp(source, agent, { recursive: true, filter: entry => !localOnly.has(path.relative(source, entry).split(path.sep)[0]) });
   await mkdir(path.join(agent, '.venv', 'bin'), { recursive: true });
   const agentcov = path.join(agent, '.venv', 'bin', 'agentcov');
-  await writeFile(agentcov, '#!/bin/sh\nmkdir -p .codex\nprintf \'{"hooks":{"PostToolUse":[{"hooks":[{"command":"agentcov hook post-tool-use"}]}]}}\' > .codex/hooks.json\n');
+  await writeFile(agentcov, '#!/bin/sh\nmkdir -p .codex\nprintf \'{"hooks":{"PostToolUse":[{"hooks":[{"command":"agentcov hook post-tool-use"}]}],"PreToolUse":[{"hooks":[{"command":"agentcov hook pre-tool-use"}]}],"Stop":[{"hooks":[{"command":"agentcov hook stop"},{"command":"echo keep-custom-stop"}]}]}}\' > .codex/hooks.json\n');
   await chmod(agentcov, 0o755);
   execFileSync('git', ['init', root]);
   await writeFile(path.join(root, 'README'), 'kernel\n');
@@ -56,7 +56,10 @@ test('token configures the matching kernel checkout and project hooks', { skip: 
   assert.equal(config.repo_root, root);
   assert.equal(config.version_id, '7.3-rc4');
   assert.match(await readFile(path.join(root, '.codex', 'config.toml'), 'utf8'), /mcp_servers\.knfsd_hivemind/);
-  const hooks = await readFile(path.join(root, '.codex', 'hooks.json'), 'utf8');
-  assert(hooks.includes(agentcov));
+  const hooks = JSON.parse(await readFile(path.join(root, '.codex', 'hooks.json'), 'utf8'));
+  const hookCommands = Object.values(hooks.hooks).flatMap(groups => groups.flatMap(group => group.hooks.map(hook => hook.command)));
+  assert.deepEqual(hookCommands.filter(command => command.includes('agentcov')), [`${agentcov} hook post-tool-use`]);
+  assert.equal(hooks.hooks.PreToolUse, undefined);
+  assert(hookCommands.includes('echo keep-custom-stop'));
   assert.equal((await readFile(path.join(agent, 'runtime', 'agents', 'jinpyo.token'), 'utf8')).trim(), token);
 });

@@ -91,7 +91,7 @@ cd "$KERNEL_DIR"
 "$AGENTCOV" install-codex-hooks --repo
 ```
 
-Codex를 쓴다면 훅 명령이 가상 환경의 agentcov를 가리키도록 고정합니다. 설치 프로그램은 기본적으로 `agentcov`라는 명령 이름을 기록하므로, 경로를 고정하지 않으면 Codex의 PATH에 따라 열람 기록이 누락될 수 있습니다.
+Codex를 쓴다면 열람 이벤트를 기록하는 `PostToolUse`만 가상 환경의 agentcov를 가리키도록 고정합니다. 아무 작업도 하지 않는 `PreToolUse`와 매 턴 전체 저장소 보고서를 만드는 `Stop`은 제거합니다. Hivemind 동기화 에이전트가 이벤트에서 NFS 범위 보고서를 별도로 생성하므로 두 훅은 필요하지 않습니다.
 
 ```bash
 "$PYTHON_BIN" - "$KERNEL_DIR/.codex/hooks.json" "$AGENTCOV" <<'PY'
@@ -102,12 +102,30 @@ import sys
 path = pathlib.Path(sys.argv[1])
 bin_path = sys.argv[2]
 data = json.loads(path.read_text(encoding='utf-8'))
-for groups in data['hooks'].values():
+kept_post = False
+for event_name, groups in list(data.get('hooks', {}).items()):
+    kept_groups = []
     for group in groups:
-        for handler in group['hooks']:
-            command = handler.get('command', '')
-            if command.startswith('agentcov hook '):
-                handler['command'] = command.replace('agentcov', bin_path, 1)
+        handlers = []
+        for handler in group.get('hooks', []):
+            command = handler.get('command', '').replace('\\', '/')
+            action = next((name for name in ('post-tool-use', 'pre-tool-use', 'stop')
+                           if command == f'agentcov hook {name}'
+                           or command.endswith(f'/agentcov hook {name}')
+                           or command.endswith(f'/agentcov.exe hook {name}')), None)
+            if action is None:
+                handlers.append(handler)
+            elif event_name == 'PostToolUse' and action == 'post-tool-use' and not kept_post:
+                handlers.append({**handler, 'command': f'{bin_path} hook post-tool-use'})
+                kept_post = True
+        if handlers:
+            kept_groups.append({**group, 'hooks': handlers})
+    if kept_groups:
+        data['hooks'][event_name] = kept_groups
+    else:
+        del data['hooks'][event_name]
+if not kept_post:
+    raise RuntimeError('agentcov PostToolUse hook was not installed')
 path.write_text(json.dumps(data, indent=2), encoding='utf-8')
 PY
 ```
@@ -267,17 +285,26 @@ Set-Location $kernel
 & $agentcovBin install-codex-hooks --repo
 ```
 
-Windows의 단순 `Get-Content` 열람은 이 폴더의 `agentcov-windows-hook.py`가 agentcov로 전달합니다. 훅을 가상 환경 경로로 바꿉니다.
+Windows의 단순 `Get-Content` 열람은 이 폴더의 `agentcov-windows-hook.py`가 agentcov로 전달합니다. `PostToolUse`는 이 어댑터를 사용하고, 불필요한 agentcov `PreToolUse`와 `Stop` 처리기는 제거합니다.
 
 ```powershell
 $hooksPath = Join-Path $kernel '.codex\hooks.json'
 $hooks = Get-Content $hooksPath -Raw | ConvertFrom-Json
-$bin = $agentcovBin.Replace('\', '/')
 $py = $pythonBin.Replace('\', '/')
 $adapter = (Join-Path $agentDir 'agentcov-windows-hook.py').Replace('\', '/')
 $hooks.hooks.PostToolUse[0].hooks[0].command = "$py $adapter"
-$hooks.hooks.PreToolUse[0].hooks[0].command = "$bin hook pre-tool-use"
-$hooks.hooks.Stop[0].hooks[0].command = "$bin hook stop"
+foreach ($eventName in @('PreToolUse', 'Stop')) {
+    $groups = @($hooks.hooks.$eventName)
+    $keptGroups = @()
+    foreach ($group in $groups) {
+        $group.hooks = @($group.hooks | Where-Object {
+            ([string]$_.command) -notmatch '(?:^|[/\\])agentcov(?:\.exe)?\s+hook\s+(?:pre-tool-use|stop)\s*$'
+        })
+        if (@($group.hooks).Count -gt 0) { $keptGroups += $group }
+    }
+    if ($keptGroups.Count -gt 0) { $hooks.hooks.$eventName = $keptGroups }
+    else { $hooks.hooks.PSObject.Properties.Remove($eventName) }
+}
 [IO.File]::WriteAllText($hooksPath, ($hooks | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
 ```
 
