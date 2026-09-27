@@ -73,8 +73,9 @@ fi
 
 if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   test "$(git -C "$ROOT" rev-parse HEAD)" = "$COMMIT" || { echo "기존 커널 체크아웃의 커밋이 $TRACK/$VERSION 과 다릅니다: $ROOT" >&2; exit 1; }
-elif [ -e "$ROOT" ]; then
-  echo "커널 설치 경로에 다른 파일이 있습니다: $ROOT" >&2
+elif [ -e "$ROOT" ] && { [ ! -d "$ROOT" ] || [ -n "$(find "$ROOT" -mindepth 1 -maxdepth 1 -print -quit)" ]; }; then
+  echo "커널 설치 경로에 기존 파일이 있습니다: $ROOT" >&2
+  echo "파일을 보존하려면 이 폴더를 다른 이름으로 옮긴 뒤 설치 명령을 다시 실행하세요." >&2
   exit 1
 else
   case "$TRACK" in
