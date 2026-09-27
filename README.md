@@ -6,7 +6,7 @@ Linux/WSL 분석 PC에서는 서버 관리자가 출력한 **설치 명령 한 �
 curl -fsSL https://raw.githubusercontent.com/bintab1e/hivemind-agent/main/install.sh | bash -s -- http://192.168.1.188:8765 rc
 ```
 
-위 IP는 예시입니다. 서버의 `bash ~/Desktop/workspace/hivemind-server/server/manage.sh agent <ID> rc` 또는 첫 `setup <ID>` 명령이 **실제 주소가 들어간 설치 명령과 토큰**을 출력합니다. `mainline` 에이전트는 마지막 인수를 `mainline`으로 사용합니다.
+위 IP는 예시입니다. 서버에서 `bash ~/Desktop/workspace/hivemind-server/server/manage.sh agent add <ID> rc`를 실행하면 **실제 주소가 들어간 설치 명령과 해당 분석 PC용 토큰**이 출력됩니다. `mainline` 에이전트는 마지막 인수를 `mainline`으로 사용합니다.
 
 설치기가 Node.js 24, Python 3.11, agentcov, 커널 Git 소스와 프로젝트별 Codex MCP·훅을 구성합니다. 커널은 서버에 등록된 공식 태그를 `~/workspace/knfsd`에 내려받고 SHA를 확인합니다. 기존 체크아웃의 SHA가 다르면 새 버전 전용 폴더에 받습니다. 사용자가 미리 커널 소스를 내려받거나 JSON 설정을 만들 필요가 없습니다. Ubuntu/WSL에서는 빠진 Git·tar·xz 등도 설치합니다.
 
