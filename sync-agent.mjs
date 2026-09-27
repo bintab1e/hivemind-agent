@@ -115,7 +115,7 @@ export async function syncExchange(config, token) {
       await fs.writeFile(ack, JSON.stringify({ source_path: sourcePath, sha256, result, at: timestamp() }, null, 2));
       console.log(`Event accepted: ${entry.name} → ${result.event_id}`);
     } catch (error) {
-      if (/^\/v1\/exchange\/events: 422 (Unknown hypothesis|Unknown supporting verification|Unknown corrected event)$/.test(error.message)) {
+      if (/^\/v1\/exchange\/events: 422 (Unknown hypothesis|Unknown verification|Unknown corrected event)$/.test(error.message)) {
         console.error(`${entry.name}: waiting for dependency: ${error.message}`);
         continue;
       }

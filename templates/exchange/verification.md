@@ -33,4 +33,4 @@ created_at: "YYYY-MM-DDTHH:MM:SSZ"
 
 ## 판정과 한계
 
-`supports`, `refutes`, `inconclusive` 중 하나를 선택한 이유와 아직 확인하지 못한 조건을 적는다. 기존 결론을 봤다면 언제, 어느 범위까지 봤는지 적는다.
+반례가 있으면 `refutes`, 판단할 수 없으면 `inconclusive`를 선택한 이유와 아직 확인하지 못한 조건을 적는다. `supports`는 과거 기록과의 호환용이며 취약점 보고의 선행 조건이 아니다. 기존 결론을 봤다면 언제, 어느 범위까지 봤는지 적는다.

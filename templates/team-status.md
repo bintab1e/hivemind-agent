@@ -42,14 +42,15 @@
 | 상태 | 가설 수 |
 | --- | ---: |
 | 검증 시도 없음 | `<unverified>` |
-| 단일 근거만 있음 | `<single-source>` |
-| 독립 근거로 지지됨 | `<independently-supported>` |
-| 지지·반박이 충돌함 | `<contested>` |
+| PoC·KASAN 보고 | `<reported>` |
+| 반박한 에이전트 1명 | `<refuted>` |
+| 반박한 에이전트 2명 이상 | `<retired>` |
+| PoC·KASAN 보고와 반박 충돌 | `<contested>` |
 | 이전 커밋의 근거라 재확인 필요 | `<stale>` |
 
 ## 새 가설과 분석
 
-- `<hypothesis-id>` — `<title>` · 검증 시도 `<attempts>`건 · `<status>`
+- `<hypothesis-id>` — `<title>` · 반박 `<refutation-count>`명 · `<status>`
 
 ## 우선 확인할 공백
 

@@ -1,0 +1,45 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { createServer } from 'node:http';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { hash, validateEvent } from './contract.mjs';
+import { handleMessage } from './mcp-agent.mjs';
+
+test('local MCP sends a direct PoC/KASAN finding without a support event', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hivemind-mcp-'));
+  const home = path.join(root, '.hivemind', 'agent', 'runtime');
+  await mkdir(home, { recursive: true });
+  await writeFile(path.join(root, 'poc.c'), 'int main(void) { return 0; }\n');
+  await writeFile(path.join(root, 'kasan.log'), 'BUG: KASAN: use-after-free in nfsd4_open\n');
+  execFileSync('git', ['init', root], { stdio: 'ignore' });
+  execFileSync('git', ['-C', root, 'add', 'poc.c'], { stdio: 'ignore' });
+  execFileSync('git', ['-C', root, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'source'], { stdio: 'ignore' });
+  const commit = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const received = [];
+  const server = createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/mcp') return res.end(JSON.stringify({ result: { structuredContent: { matches: [] } } }));
+    const event = validateEvent(body);
+    received.push(event.data);
+    const eventId = hash(`${event.data.version_id}\0pc1\0${body.source_path}`);
+    res.end(JSON.stringify({ event_id: eventId, hypothesis_id: event.data.kind === 'hypothesis' ? `H-${eventId.slice(0, 12)}` : event.data.finding_of, possible_matches: [] }));
+  }).listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const config = { agent_id: 'pc1', track_id: 'rc', version_id: '7.3-rc4', repo_root: root, home, server: `http://127.0.0.1:${server.address().port}` };
+  const invoke = (name, args) => handleMessage(config, 'a'.repeat(64), { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+  const common = { title: 'nfsd 경계 처리', scope: ['fs/nfsd/'], code_refs: ['fs/nfsd/nfs4proc.c#nfsd4_open'], angle: 'runtime-reproduction', body: '## 근거\n동일 커밋에서 재현했다.' };
+  const hypothesis = (await invoke('queue_hypothesis', { ...common, claim_key: 'nfsd-boundary', verification_plan: 'PoC를 실행한다', preflight: 'checked' })).result.structuredContent;
+  assert.equal(hypothesis.accepted, true);
+  const finding = (await invoke('queue_finding', { ...common, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', impact: '메모리 오류', reproduction_command: './poc', poc_path: 'poc.c', kasan_path: 'kasan.log' })).result.structuredContent;
+  assert.equal(finding.accepted, true);
+  assert.deepEqual(received.map(item => item.kind), ['hypothesis', 'finding']);
+  assert.equal(received[1].evidence_event_ids, undefined);
+  assert.match(await readFile(finding.file, 'utf8'), /BUG: KASAN:/);
+});

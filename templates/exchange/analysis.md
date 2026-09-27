@@ -23,7 +23,7 @@ created_at: "YYYY-MM-DDTHH:MM:SSZ"
 
 ## 해석
 
-현재 자료가 시사하는 바를 적는다. 기존 가설의 지지·반박 판정은 별도 `verification` 이벤트로 기록한다.
+현재 자료가 시사하는 바를 적는다. 기존 가설의 반례는 별도 `verification` 이벤트로, PoC·KASAN은 `finding` 이벤트로 기록한다.
 
 ## 남은 작업
 

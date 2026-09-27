@@ -1,35 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_URL="${HIVEMIND_SERVER_URL:-http://192.168.1.188:8765}"
+SERVER_URL="${1:-${HIVEMIND_SERVER_URL:-}}"
+TRACK="${2:-${HIVEMIND_TRACK:-rc}}"
 SOURCE="${HIVEMIND_AGENT_SOURCE:-https://github.com/bintab1e/hivemind-agent.git}"
+ROOT="${HIVEMIND_KERNEL_ROOT:-$HOME/workspace/knfsd}"
 
-command -v git >/dev/null || { echo 'git이 필요합니다.' >&2; exit 1; }
-command -v curl >/dev/null || { echo 'curl이 필요합니다.' >&2; exit 1; }
-if [ -d "$HOME/workspace/knfsd" ]; then
-  ROOT="$(git -C "$HOME/workspace/knfsd" rev-parse --show-toplevel 2>/dev/null)" || { echo '~/workspace/knfsd가 커널 Git 체크아웃이 아닙니다.' >&2; exit 1; }
-else
-  ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo '커널 Git 체크아웃 안에서 실행하세요.' >&2; exit 1; }
-fi
-AGENT="$ROOT/.hivemind/agent"
+[[ "$SERVER_URL" =~ ^https?://[^[:space:]]+$ ]] || { echo '서버 URL이 필요합니다. 서버의 manage.mjs가 출력한 설치 명령을 사용하세요.' >&2; exit 1; }
+[[ "$TRACK" == rc || "$TRACK" == mainline ]] || { echo '트랙은 rc 또는 mainline이어야 합니다.' >&2; exit 1; }
+for name in git curl tar xz sha256sum; do command -v "$name" >/dev/null || { echo "$name 설치가 필요합니다." >&2; exit 1; }; done
 curl -fsS "$SERVER_URL/healthz" >/dev/null || { echo "서버에 연결할 수 없습니다: $SERVER_URL" >&2; exit 1; }
 
-if [ -d "$AGENT/.git" ]; then
-  git -C "$AGENT" pull --ff-only
-elif [ -e "$AGENT" ]; then
-  echo "기존 에이전트 폴더가 있습니다: $AGENT (수동으로 백업하거나 정리하세요)" >&2
-  exit 1
-else
-  mkdir -p "$(dirname "$AGENT")"
-  git clone --depth 1 "$SOURCE" "$AGENT"
-fi
-
-if command -v node >/dev/null && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
+if command -v node >/dev/null && node -e 'process.exit(process.platform === "linux" && Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
   NODE="$(command -v node)"
 else
   case "$(uname -m)" in x86_64) ARCH=x64 ;; aarch64) ARCH=arm64 ;; *) echo 'Node.js 24용 x86_64 또는 aarch64가 필요합니다.' >&2; exit 1 ;; esac
-  NODE_DIR="$AGENT/.local/node24"
-  mkdir -p "$NODE_DIR"
+  NODE_DIR="$HOME/.local/opt/hivemind-node24"
   DOWNLOAD="$(mktemp -d)"
   trap 'rm -rf -- "$DOWNLOAD"' EXIT
   curl -fsS 'https://nodejs.org/dist/latest-v24.x/SHASUMS256.txt' -o "$DOWNLOAD/SHASUMS256.txt"
@@ -37,10 +23,72 @@ else
   test -n "$ARCHIVE" || { echo 'Node.js 24 배포 파일을 찾을 수 없습니다.' >&2; exit 1; }
   curl -fsS "https://nodejs.org/dist/latest-v24.x/$ARCHIVE" -o "$DOWNLOAD/$ARCHIVE"
   (cd "$DOWNLOAD" && grep -F "  $ARCHIVE" SHASUMS256.txt | sha256sum -c -)
+  mkdir -p "$NODE_DIR"
   tar -xJf "$DOWNLOAD/$ARCHIVE" -C "$NODE_DIR" --strip-components=1
   NODE="$NODE_DIR/bin/node"
   rm -rf -- "$DOWNLOAD"
   trap - EXIT
+fi
+
+TOKEN_FILE="$(mktemp)"
+trap 'rm -f -- "$TOKEN_FILE"' EXIT
+if [ -n "${HIVEMIND_TOKEN_FILE:-}" ]; then
+  cp -- "$HIVEMIND_TOKEN_FILE" "$TOKEN_FILE"
+else
+  printf '전달받은 에이전트 토큰: ' >/dev/tty
+  IFS= read -rs TOKEN </dev/tty
+  printf '\n' >/dev/tty
+  printf '%s' "$TOKEN" > "$TOKEN_FILE"
+  unset TOKEN
+fi
+[[ "$(cat "$TOKEN_FILE")" =~ ^[a-fA-F0-9]{64}$ ]] || { echo '64자리 토큰이 필요합니다.' >&2; exit 1; }
+
+read -r VERSION COMMIT < <("$NODE" --input-type=module - "$TOKEN_FILE" "$SERVER_URL" "$TRACK" <<'JS'
+import fs from 'node:fs';
+const [tokenFile, server, track] = process.argv.slice(2);
+const token = fs.readFileSync(tokenFile, 'utf8').trim();
+const headers = { Authorization: `Bearer ${token}` };
+const health = await fetch(`${server}/v1/sync/health`, { headers });
+if (!health.ok) throw new Error(`에이전트 토큰 인증 실패 (${health.status})`);
+const response = await fetch(`${server}/mcp`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_versions', arguments: {} } }) });
+if (!response.ok) throw new Error(`대상 조회 실패 (${response.status})`);
+const payload = await response.json();
+const target = payload.result?.structuredContent?.tracks?.find(item => item.track_id === track && item.version_id && item.repo_commit);
+if (!target) throw new Error(`${track} 대상이 서버에 등록되지 않았습니다.`);
+console.log(target.version_id, target.repo_commit);
+JS
+)
+[[ "$COMMIT" =~ ^[a-fA-F0-9]{40}$ ]] || { echo '서버에서 올바른 커널 커밋을 받지 못했습니다.' >&2; exit 1; }
+if [ -z "${HIVEMIND_KERNEL_ROOT:-}" ] && git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 && [ "$(git -C "$ROOT" rev-parse HEAD)" != "$COMMIT" ]; then
+  ROOT="$HOME/workspace/knfsd-$TRACK-$VERSION"
+fi
+
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  test "$(git -C "$ROOT" rev-parse HEAD)" = "$COMMIT" || { echo "기존 커널 체크아웃의 커밋이 $TRACK/$VERSION 과 다릅니다: $ROOT" >&2; exit 1; }
+elif [ -e "$ROOT" ]; then
+  echo "커널 설치 경로에 다른 파일이 있습니다: $ROOT" >&2
+  exit 1
+else
+  case "$TRACK" in
+    rc) KERNEL_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git' ;;
+    mainline) KERNEL_SOURCE='https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git' ;;
+  esac
+  KERNEL_SOURCE="${HIVEMIND_KERNEL_SOURCE:-$KERNEL_SOURCE}"
+  mkdir -p "$(dirname "$ROOT")"
+  echo "커널 소스 v$VERSION 다운로드 중: $ROOT"
+  git clone --depth 1 --branch "v$VERSION" --single-branch "$KERNEL_SOURCE" "$ROOT"
+  test "$(git -C "$ROOT" rev-parse HEAD)" = "$COMMIT" || { echo '서버에 등록된 SHA와 내려받은 커널 태그가 다릅니다.' >&2; exit 1; }
+fi
+
+AGENT="$ROOT/.hivemind/agent"
+if [ -d "$AGENT/.git" ]; then
+  git -C "$AGENT" pull --ff-only
+elif [ -e "$AGENT" ]; then
+  echo "기존 에이전트 폴더에 다른 파일이 있습니다: $AGENT" >&2
+  exit 1
+else
+  mkdir -p "$(dirname "$AGENT")"
+  git clone --depth 1 "$SOURCE" "$AGENT"
 fi
 
 UV="$AGENT/.local/bin/uv"
@@ -51,16 +99,7 @@ fi
 "$UV" venv --python 3.11 "$AGENT/.venv"
 "$UV" pip install --python "$AGENT/.venv/bin/python" -r "$AGENT/requirements.txt"
 
-TOKEN_FILE="$(mktemp)"
-trap 'rm -f -- "$TOKEN_FILE"' EXIT
-printf '전달받은 에이전트 토큰: ' >/dev/tty
-IFS= read -rs TOKEN </dev/tty
-printf '\n' >/dev/tty
-[[ "$TOKEN" =~ ^[a-fA-F0-9]{64}$ ]] || { echo '64자리 토큰이 필요합니다.' >&2; exit 1; }
-printf '%s' "$TOKEN" > "$TOKEN_FILE"
-unset TOKEN
-"$NODE" "$AGENT/setup.mjs" "$ROOT" "$TOKEN_FILE" "$SERVER_URL"
-
+HIVEMIND_TRACK="$TRACK" "$NODE" "$AGENT/setup.mjs" "$ROOT" "$TOKEN_FILE" "$SERVER_URL"
 ID="$(cat "$AGENT/runtime/active-agent-id")"
 CONFIG="$AGENT/runtime/agents/$ID.json"
 if systemctl --user show-environment >/dev/null 2>&1; then
@@ -88,4 +127,5 @@ else
   echo $! > "$AGENT/runtime/sync.pid"
   echo "동기화 로그: $AGENT/runtime/sync.log (WSL 종료 시 다시 실행 필요)"
 fi
-echo "완료. $ROOT 에서 새 Codex 세션을 열고 프로젝트와 훅을 신뢰하세요."
+echo "완료: $ID / $TRACK / $VERSION / $ROOT"
+echo '이 커널 폴더에서 새 Codex 세션을 열고 프로젝트와 agentcov 훅을 신뢰하세요.'

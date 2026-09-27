@@ -56,7 +56,7 @@ export async function configure(root, tokenFile, serverUrl = defaultServerUrl) {
   const versions = await getJson(`${serverUrl}/mcp`, token, {
     jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_versions', arguments: {} },
   });
-  const matches = (versions.result?.structuredContent?.tracks || []).filter(track => track.version_id && track.repo_commit === commit);
+  const matches = (versions.result?.structuredContent?.tracks || []).filter(track => track.version_id && track.repo_commit === commit && (!process.env.HIVEMIND_TRACK || track.track_id === process.env.HIVEMIND_TRACK));
   if (matches.length !== 1) throw new Error(`커널 커밋 ${commit}과 일치하는 서버 대상이 없습니다. 서버에 rc/stable 대상 커밋을 등록하세요.`);
   const target = matches[0];
   const id = health.agent_id;

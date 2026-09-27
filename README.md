@@ -1,22 +1,17 @@
 # Hivemind 분석 에이전트
 
-Linux/WSL에서 명령 **한 줄**로 설치합니다. 커널 소스가 `~/workspace/knfsd`의 Git 체크아웃이면 어느 디렉터리에서 실행해도 됩니다. 다른 위치라면 그 커널 Git 체크아웃에서 실행하세요. 서버가 발급한 64자리 에이전트 토큰만 준비하세요. 토큰은 입력할 때 화면이나 셸 기록에 표시되지 않습니다.
+Linux/WSL 분석 PC에서는 서버 관리자가 출력한 **설치 명령 한 줄**을 실행하고 전달받은 토큰을 입력합니다. 서버 주소와 트랙은 명령에 이미 들어 있습니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bintab1e/hivemind-agent/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/bintab1e/hivemind-agent/main/install.sh | bash -s -- http://192.168.1.188:8765 rc
 ```
 
-설치기는 [`hivemind-server`](https://github.com/bintab1e/hivemind-server)가 실행 중인 `192.168.1.188:8765`에 연결해 커널 커밋이 등록된 `rc` 또는 `mainline` 대상인지 확인합니다. 서버와 같은 내부망에서 실행하고 서버 IP를 `192.168.1.188`로 유지하세요. 사전에 필요한 도구는 `curl`과 `git`입니다. 설치기가 Node.js 24, Python 3.11, agentcov를 사용자 폴더에 설치하며 `sudo`는 사용하지 않습니다.
+위 IP는 예시입니다. 서버의 `bash ~/Desktop/workspace/hivemind-server/server/manage.sh agent <ID> rc` 또는 첫 `setup <ID>` 명령이 **실제 주소가 들어간 설치 명령과 토큰**을 출력합니다. `mainline` 에이전트는 마지막 인수를 `mainline`으로 사용합니다.
 
-설치기는 이 저장소를 커널 체크아웃의 `.hivemind/agent`에 받고, agentcov와 프로젝트별 Codex 훅·MCP 설정, 분석 진행 파일, 5분 동기화 서비스를 구성합니다. WSL에서 systemd 사용자 서비스가 없으면 현재 WSL 세션의 백그라운드 프로세스로 동기화합니다. Codex를 새로 열 때 프로젝트와 훅을 신뢰해야 실제 열람 기록이 시작됩니다.
+설치기가 Node.js 24, Python 3.11, agentcov, 커널 Git 소스와 프로젝트별 Codex MCP·훅을 구성합니다. 커널은 서버에 등록된 공식 태그를 `~/workspace/knfsd`에 내려받고 SHA를 확인합니다. 기존 체크아웃의 SHA가 다르면 새 버전 전용 폴더에 받습니다. 사용자가 미리 커널 소스를 내려받거나 JSON 설정을 만들 필요가 없습니다. 사전 준비는 `git`, `curl`, `tar`, `xz`, `sha256sum`입니다.
 
-확인:
+설치가 끝나면 출력된 커널 폴더에서 **새 Codex 세션**을 열고 프로젝트와 agentcov 훅을 신뢰하세요. stdio MCP는 가설·반박·PoC/KASAN 보고를 즉시 서버로 보내고, 동기화 에이전트는 agentcov 코드 열람 기록을 5분마다 보냅니다. systemd가 있는 Linux에서는 `systemctl --user status hivemind-agent`로 상태를 확인합니다. WSL에 systemd가 없다면 해당 세션의 백그라운드 동기화로 실행됩니다.
 
-```bash
-curl -fsS http://192.168.1.188:8765/healthz
-systemctl --user status hivemind-agent   # systemd를 사용할 때
-```
+가설을 직접 테스트해 PoC와 KASAN 로그를 얻으면 지지 검증 없이 `queue_finding`으로 바로 보고합니다. 반례는 `queue_verification`의 `refutes`로 기록합니다. 같은 커밋에서 서로 다른 두 에이전트가 반박하면 서버가 가설을 재시도 보류로 표시합니다. **코드 열람률은 검증 결과가 아닙니다.**
 
-대시보드: <http://192.168.1.188:8765/>. HTTP 직접 연결은 내부망에서만 사용합니다. 토큰·대시보드 비밀번호·분석 기록이 암호화되지 않으므로 인터넷 포트 포워딩을 하지 마세요.
-
-Windows 분석 PC 또는 수동 설치: [MANUAL.md](MANUAL.md).
+Windows 네이티브 또는 수동 설치: [MANUAL.md](MANUAL.md). 중앙 서버 설치: [hivemind-server](https://github.com/bintab1e/hivemind-server).
