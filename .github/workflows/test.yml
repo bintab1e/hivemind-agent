@@ -9,4 +9,4 @@ jobs:
         with:
           node-version: '24'
       - run: bash -n install.sh
-      - run: node --test setup.test.mjs
+      - run: node --test setup.test.mjs sync-agent.test.mjs
