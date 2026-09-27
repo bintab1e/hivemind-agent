@@ -19,8 +19,7 @@ const common = {
 };
 const schema = (properties, required) => ({ type: 'object', properties: { ...common, ...properties }, required: ['title', 'scope', 'angle', 'body', ...required], additionalProperties: false });
 const localTools = [
-  { name: 'queue_hypothesis', description: '코드 위치·검증 계획·현재 커밋을 담은 가설을 검색 후 서버에 즉시 전송한다. 동일 주장이 폐기 상태면 재등록을 피하고, 새 증거가 있을 때만 검증을 추가한다.', inputSchema: schema({ claim_key: { type: 'string' }, verification_plan: { type: 'string', maxLength: 1000, description: '다른 에이전트가 실행할 수 있는 구체적인 확인 방법' }, preflight: { type: 'string', enum: ['checked', 'unavailable'] }, related_hypothesis_id: { type: 'string' } }, ['code_refs', 'claim_key', 'verification_plan', 'preflight']) },
-  { name: 'queue_analysis', description: '분석 결과를 outbox Markdown으로 저장한다. 기존 가설에 연결하려면 hypothesis_id를 넣는다.', inputSchema: schema({ hypothesis_id: { type: 'string' } }, []) },
+  { name: 'queue_hypothesis', description: '코드 위치·검증 계획·현재 커밋을 담은 가설을 검색 후 서버에 즉시 전송한다. 같은 커밋의 폐기 가설이 있으면 재등록·재검증하지 않는다.', inputSchema: schema({ claim_key: { type: 'string' }, verification_plan: { type: 'string', maxLength: 1000, description: '다른 에이전트가 실행할 수 있는 구체적인 확인 방법' }, preflight: { type: 'string', enum: ['checked', 'unavailable'] }, related_hypothesis_id: { type: 'string' } }, ['code_refs', 'claim_key', 'verification_plan', 'preflight']) },
   { name: 'queue_verification', description: '기존 가설의 반례 또는 미결 결과를 코드 위치·방법과 함께 즉시 보낸다. PoC·KASAN이 있으면 queue_finding을 쓴다.', inputSchema: schema({ verification_of: { type: 'string' }, method: { type: 'string' }, verdict: { type: 'string', enum: ['refutes', 'inconclusive'] }, prior_exposure: { type: 'string', enum: ['none', 'claim_only', 'summary', 'full'] }, based_on_event_ids: { type: 'array', items: { type: 'string' } } }, ['code_refs', 'verification_of', 'method', 'verdict', 'prior_exposure', 'based_on_event_ids']) },
   { name: 'queue_finding', description: '가설을 직접 테스트해 실제 PoC와 해당 실행의 KASAN 로그를 얻었다면 즉시 보고한다. 지지 검증 기록은 필요하지 않다.', inputSchema: schema({ finding_of: { type: 'string', description: '취약점 발견으로 이어진 가설 ID' }, file_path: { type: 'string', description: '취약점이 있는 저장소 상대 파일 경로. 예: fs/nfsd/nfs4proc.c' }, evidence_event_ids: { type: 'array', items: { type: 'string' }, description: '선택 사항: 연결할 현재 커밋의 검증 이벤트 ID' }, impact: { type: 'string', maxLength: 1000, description: 'KASAN으로 관찰한 문제의 보안 영향' }, poc_path: { type: 'string', description: '실제 PoC 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, kasan_path: { type: 'string', description: 'PoC 실행에서 얻은 BUG: KASAN 로그 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, reproduction_command: { type: 'string', maxLength: 1000, description: '해당 PoC로 KASAN을 재현한 명령' } }, ['code_refs', 'finding_of', 'file_path', 'impact', 'poc_path', 'kasan_path', 'reproduction_command']) },
   { name: 'queue_correction', description: '수락된 기록을 덮어쓰지 않고 정정 이벤트를 새 outbox Markdown으로 저장한다.', inputSchema: schema({ corrects_event_id: { type: 'string' } }, ['corrects_event_id']) },
@@ -33,7 +32,7 @@ function markdownFor(config, kind, args, commit) {
     title: args.title, scope: args.scope, angle: args.angle,
     created_at: new Date().toISOString(),
   };
-  for (const key of ['code_refs', 'claim_key', 'verification_plan', 'preflight', 'related_hypothesis_id', 'hypothesis_id', 'verification_of', 'method', 'verdict', 'prior_exposure', 'based_on_event_ids', 'finding_of', 'file_path', 'evidence_event_ids', 'impact', 'reproduction_command', 'poc_source', 'poc_sha256', 'kasan_log', 'kasan_sha256', 'corrects_event_id']) {
+  for (const key of ['code_refs', 'claim_key', 'verification_plan', 'preflight', 'related_hypothesis_id', 'verification_of', 'method', 'verdict', 'prior_exposure', 'based_on_event_ids', 'finding_of', 'file_path', 'evidence_event_ids', 'impact', 'reproduction_command', 'poc_source', 'poc_sha256', 'kasan_log', 'kasan_sha256', 'corrects_event_id']) {
     if (args[key] !== undefined) fields[key] = args[key];
   }
   const lines = Object.entries(fields).flatMap(([key, value]) => Array.isArray(value)
@@ -78,7 +77,7 @@ export async function queueRecord(config, kind, args, commit) {
     throw error;
   }
   const eventId = sha256(`${config.version_id}\0${config.agent_id}\0${sourcePath}`);
-  return { queued: true, event_id: eventId, hypothesis_id: kind === 'hypothesis' ? `H-${eventId.slice(0, 12)}` : args.verification_of || args.finding_of || args.hypothesis_id || null, source_path: sourcePath, file: finalPath, version_id: config.version_id, repo_commit: commit };
+  return { queued: true, event_id: eventId, hypothesis_id: kind === 'hypothesis' ? `H-${eventId.slice(0, 12)}` : args.verification_of || args.finding_of || null, source_path: sourcePath, file: finalPath, version_id: config.version_id, repo_commit: commit };
 }
 
 async function sendRecord(config, token, queued) {
@@ -143,7 +142,7 @@ export async function handleMessage(config, token, message) {
       } catch (error) { searchWarning = `중앙 중복 후보 조회 실패: ${error.message}`; }
       const same = matches.filter(item => item.claim_key?.toLowerCase() === args.claim_key?.toLowerCase());
       if (same.some(item => item.status === 'retired') || (same.length && !args.related_hypothesis_id)) {
-        const result = { queued: false, possible_matches: matches, note: same.some(item => item.status === 'retired') ? '현재 커밋에서 독립 반박이 누적된 폐기 가설입니다. 같은 가설을 재등록하지 마세요. 새 코드·실험 근거가 있다면 해당 ID에 queue_verification으로 기록하세요.' : '동일 claim_key가 있습니다. get_hypothesis로 주장을 확인하고, 같은 주장이라면 queue_verification을 사용하세요. 다른 주장이라면 related_hypothesis_id와 차이를 본문에 적어 다시 호출하세요.' };
+        const result = { queued: false, possible_matches: matches, note: same.some(item => item.status === 'retired') ? '현재 커밋에서 폐기된 가설입니다. 같은 가설의 재등록·재검증을 멈추고 다른 후보로 이동하세요. 기존 반박 기록 자체가 오류라면 queue_correction으로 정정할 수 있습니다.' : '동일 claim_key가 있습니다. get_hypothesis로 주장을 확인하세요. 같은 주장이라면 기존 ID를 검증하거나 PoC·KASAN 보고에 연결하고, 다른 주장이라면 related_hypothesis_id와 차이를 본문에 적어 다시 호출하세요.' };
         return answer({ content: [{ type: 'text', text: JSON.stringify(result) }], structuredContent: result, isError: false });
       }
     }

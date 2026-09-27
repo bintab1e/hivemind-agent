@@ -34,6 +34,8 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
   const config = { agent_id: 'pc1', track_id: 'rc', version_id: '7.3-rc4', repo_root: root, home, server: `http://127.0.0.1:${server.address().port}` };
   const invoke = (name, args) => handleMessage(config, 'a'.repeat(64), { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
+  const listed = await handleMessage(config, 'a'.repeat(64), { jsonrpc: '2.0', id: 1, method: 'tools/list' });
+  assert(!listed.result.tools.some(tool => tool.name === 'queue_analysis' || tool.name === 'get_recent_analyses'));
   const common = { title: 'nfsd 경계 처리', scope: ['fs/nfsd/'], code_refs: ['fs/nfsd/nfs4proc.c#nfsd4_open'], angle: 'runtime-reproduction', body: '## 근거\n동일 커밋에서 재현했다.' };
   const hypothesis = (await invoke('queue_hypothesis', { ...common, claim_key: 'nfsd-boundary', verification_plan: 'PoC를 실행한다', preflight: 'checked' })).result.structuredContent;
   assert.equal(hypothesis.accepted, true);

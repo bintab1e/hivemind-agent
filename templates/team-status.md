@@ -48,14 +48,13 @@
 | PoC·KASAN 보고와 반박 충돌 | `<contested>` |
 | 이전 커밋의 근거라 재확인 필요 | `<stale>` |
 
-## 새 가설과 분석
+## 가설 상태
 
 - `<hypothesis-id>` — `<title>` · 반박 `<refutation-count>`명 · `<status>`
 
 ## 우선 확인할 공백
 
 - `<path>:<line-range>` — agentcov에 직접 열람 기록 없음
-- `<path>` — 열람 기록은 있으나 연결된 분석·검증 기록 없음
 - `<hypothesis-id>` — 독립 검증이 없거나 결론이 충돌함
 
 서로 다른 커밋이나 변경된 작업 트리의 수치는 이 보고서의 팀 합산에서 제외하고 별도 섹션에 표시한다.

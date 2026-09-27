@@ -12,6 +12,6 @@ curl -fsSL https://raw.githubusercontent.com/bintab1e/hivemind-agent/main/instal
 
 설치가 끝나면 출력된 커널 폴더에서 **새 Codex 세션**을 열고 프로젝트와 agentcov 훅을 신뢰하세요. stdio MCP는 가설·반박·PoC/KASAN 보고를 즉시 서버로 보내고, 동기화 에이전트는 agentcov 코드 열람 기록을 5분마다 보냅니다. systemd가 있는 Linux에서는 `systemctl --user status hivemind-agent`로 상태를 확인합니다. WSL에 systemd가 없다면 해당 세션의 백그라운드 동기화로 실행됩니다.
 
-가설을 직접 테스트해 PoC와 KASAN 로그를 얻으면 지지 검증 없이 `queue_finding`으로 바로 보고합니다. 반례는 `queue_verification`의 `refutes`로 기록합니다. 같은 커밋에서 서로 다른 두 에이전트가 반박하면 서버가 가설을 재시도 보류로 표시합니다. **코드 열람률은 검증 결과가 아닙니다.**
+중간 분석 메모는 MCP로 보내지 않습니다. 가설이 생기면 기존 가설을 검색하고, 활성 가설이면 그 ID에서 검증합니다. 같은 커밋에서 폐기된 가설이면 재검증하지 않습니다. PoC와 KASAN 로그를 얻으면 `queue_finding`으로 바로 보고하고, 반례는 `queue_verification`의 `refutes`로 기록합니다. 잘못 올린 반박은 `queue_correction`으로 정정합니다. **코드 열람률은 검증 결과가 아닙니다.**
 
 Windows 네이티브 또는 수동 설치: [MANUAL.md](MANUAL.md). 중앙 서버 설치: [hivemind-server](https://github.com/bintab1e/hivemind-server).

@@ -7,6 +7,18 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
+test('reinstall removes obsolete analysis instructions and keeps project guidance', async t => {
+  const root = await mkdtemp(path.join(tmpdir(), 'hivemind-instructions-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFile(path.join(root, 'AGENTS.md'), '# knfsd Hivemind 분석\n\n- 공유할 가설이 구체화되면 예전 규칙\n- 공유할 가설·분석·검증·정정은 queue_analysis 사용\n\n# 팀 규칙\n기존 지침 유지\n');
+  const { updateInstructions } = await import('./setup.mjs');
+  updateInstructions(root);
+  const result = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
+  assert.match(result, /중간 메모는 MCP로 보내지 않는다/);
+  assert.doesNotMatch(result, /queue_analysis/);
+  assert.match(result, /기존 지침 유지/);
+});
+
 test('token configures the matching kernel checkout and project hooks', { skip: process.platform === 'win32' }, async t => {
   const temp = await mkdtemp(path.join(tmpdir(), 'hivemind-install-'));
   const root = path.join(temp, 'linux');

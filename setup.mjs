@@ -48,6 +48,24 @@ function installHooks(root, agentcovBin) {
   fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
 }
 
+export function updateInstructions(root) {
+  const file = path.join(root, 'AGENTS.md');
+  const content = fs.readFileSync(path.join(agentDir, 'knfsd-AGENTS.md'), 'utf8');
+  if (!fs.existsSync(file)) return fs.writeFileSync(file, content);
+  const existing = fs.readFileSync(file, 'utf8');
+  if (!existing.includes('# knfsd Hivemind 분석')) return fs.appendFileSync(file, `\n\n${content}`);
+  const newLines = content.split(/\r?\n/);
+  const replacements = [
+    ['- 공유할 가설이 구체화되면', '- 분석 중간 메모는 MCP로 보내지 않는다.'],
+    ['- 공유할 가설·분석·검증·정정은', '- 새 가설·기존 가설의 검증 결과·잘못된 기록의 정정만'],
+  ];
+  const updated = existing.split(/\r?\n/).map(line => {
+    const replacement = replacements.find(([old]) => line.startsWith(old));
+    return replacement ? newLines.find(item => item.startsWith(replacement[1])) || line : line;
+  }).join('\n');
+  if (updated !== existing) fs.writeFileSync(file, updated);
+}
+
 export async function configure(root, tokenFile, serverUrl = defaultServerUrl) {
   const token = fs.readFileSync(tokenFile, 'utf8').trim();
   if (!/^[a-f0-9]{64}$/i.test(token)) throw new Error('64자리 에이전트 토큰이 필요합니다.');
@@ -88,10 +106,7 @@ export async function configure(root, tokenFile, serverUrl = defaultServerUrl) {
   } else fs.writeFileSync(progressFile, `---\nschema_version: 1\nversion_id: ${target.version_id}\nrepo_commit: ${commit}\nupdated_at: "${new Date().toISOString()}"\n---\n\n# 분석 진행 기록\n\n| task_id | status | 확인한 범위·근거 | 관련 가설 | 관련 이벤트 |\n| --- | --- | --- | --- | --- |\n`);
   saveCodexConfig(root, configPath);
   installHooks(root, agentcovBin);
-  const instructions = path.join(root, 'AGENTS.md');
-  const content = fs.readFileSync(path.join(agentDir, 'knfsd-AGENTS.md'), 'utf8');
-  if (!fs.existsSync(instructions)) fs.writeFileSync(instructions, content);
-  else if (!fs.readFileSync(instructions, 'utf8').includes('# knfsd Hivemind 분석')) fs.appendFileSync(instructions, `\n\n${content}`);
+  updateInstructions(root);
   const excludePath = git(root, 'rev-parse', '--git-path', 'info/exclude');
   const exclude = path.resolve(root, excludePath);
   const ignored = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
