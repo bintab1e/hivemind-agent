@@ -39,17 +39,13 @@ else
   trap - EXIT
 fi
 
-if ! command -v python3 >/dev/null; then
-  command -v apt-get >/dev/null || { echo 'Python 3.11 이상이 필요합니다.' >&2; exit 1; }
-  sudo apt-get update && sudo apt-get install -y python3 python3-venv
+UV="$AGENT/.local/bin/uv"
+if [ ! -x "$UV" ]; then
+  mkdir -p "$(dirname "$UV")"
+  curl -LsSf 'https://astral.sh/uv/0.12.19/install.sh' | env UV_INSTALL_DIR="$(dirname "$UV")" UV_NO_MODIFY_PATH=1 sh
 fi
-python3 -c 'import sys; assert sys.version_info >= (3, 11), "Python 3.11 이상이 필요합니다."'
-if ! python3 -m venv "$AGENT/.venv"; then
-  command -v apt-get >/dev/null || { echo 'python3-venv가 필요합니다.' >&2; exit 1; }
-  sudo apt-get update && sudo apt-get install -y python3-venv
-  python3 -m venv "$AGENT/.venv"
-fi
-"$AGENT/.venv/bin/python" -m pip install -r "$AGENT/requirements.txt"
+"$UV" venv --python 3.11 "$AGENT/.venv"
+"$UV" pip install --python "$AGENT/.venv/bin/python" -r "$AGENT/requirements.txt"
 
 TOKEN_FILE="$(mktemp)"
 trap 'rm -f -- "$TOKEN_FILE"' EXIT
