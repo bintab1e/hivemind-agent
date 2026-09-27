@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 
 export const hash = value => createHash('sha256').update(value).digest('hex');
 export const evidenceLimits = { poc: 250_000, kasan: 600_000 };
+const hasKorean = value => typeof value === 'string' && /[가-힣]/u.test(value);
 
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -71,6 +72,7 @@ export function validateEvent(input) {
     required(data.claim_key, 'claim_key', 160);
     required(data.verification_plan, 'verification_plan', 1000);
     if (!['checked', 'unavailable'].includes(data.preflight)) invalid('Invalid preflight');
+    if (!hasKorean(data.verification_plan) || !hasKorean(body)) invalid('가설의 검증 계획과 Markdown 본문은 한국어로 작성해야 합니다');
   }
   if (data.kind === 'verification') {
     required(data.verification_of, 'verification_of', 32);
@@ -78,6 +80,7 @@ export function validateEvent(input) {
     if (!['supports', 'refutes', 'inconclusive'].includes(data.verdict)) invalid('Invalid verdict');
     if (!['none', 'claim_only', 'summary', 'full'].includes(data.prior_exposure)) invalid('Invalid prior_exposure');
     if (!Array.isArray(data.based_on_event_ids) || data.based_on_event_ids.some(v => typeof v !== 'string')) invalid('Invalid based_on_event_ids');
+    if (!hasKorean(data.method) || !hasKorean(body)) invalid('검증 방법과 Markdown 본문은 한국어로 작성해야 합니다');
   }
   if (data.kind === 'finding') {
     required(data.finding_of, 'finding_of', 32);
@@ -88,6 +91,7 @@ export function validateEvent(input) {
     if (data.evidence_event_ids != null && (!Array.isArray(data.evidence_event_ids) || data.evidence_event_ids.length > 30 || new Set(data.evidence_event_ids).size !== data.evidence_event_ids.length || data.evidence_event_ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/i.test(id)))) invalid('Invalid evidence_event_ids');
     if (typeof data.poc_source !== 'string' || !data.poc_source.trim() || Buffer.byteLength(data.poc_source) > evidenceLimits.poc || hash(data.poc_source) !== data.poc_sha256) invalid('Invalid PoC source or hash');
     if (typeof data.kasan_log !== 'string' || !/^[ \t]*(?:\[[^\]\r\n]{1,40}\][ \t]*)?BUG:[ \t]*KASAN:/im.test(data.kasan_log) || Buffer.byteLength(data.kasan_log) > evidenceLimits.kasan || hash(data.kasan_log) !== data.kasan_sha256) invalid('Invalid KASAN log or hash');
+    if (!hasKorean(data.impact) || !hasKorean(body)) invalid('취약점 영향과 Markdown 본문은 한국어로 작성해야 합니다');
   }
   if (data.kind === 'correction') required(data.corrects_event_id, 'corrects_event_id', 64);
   return { agentId, sourcePath, markdown, digest, data };

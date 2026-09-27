@@ -58,6 +58,7 @@ export function updateInstructions(root) {
   const replacements = [
     ['- 공유할 가설이 구체화되면', '- 분석 중간 메모는 MCP로 보내지 않는다.'],
     ['- 공유할 가설·분석·검증·정정은', '- 새 가설·기존 가설의 검증 결과·잘못된 기록의 정정만'],
+    ['- 새 가설·기존 가설의 검증 결과·잘못된 기록의 정정만', '- 새 가설·기존 가설의 검증 결과·잘못된 기록의 정정만'],
   ];
   const updated = existing.split(/\r?\n/).map(line => {
     const replacement = replacements.find(([old]) => line.startsWith(old));

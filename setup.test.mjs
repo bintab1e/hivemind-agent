@@ -16,6 +16,7 @@ test('reinstall removes obsolete analysis instructions and keeps project guidanc
   const result = await readFile(path.join(root, 'AGENTS.md'), 'utf8');
   assert.match(result, /중간 메모는 MCP로 보내지 않는다/);
   assert.doesNotMatch(result, /queue_analysis/);
+  assert.match(result, /제목은 영어여도 되지만 Markdown 설명 본문/);
   assert.match(result, /기존 지침 유지/);
 });
 
