@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { gunzipSync } from 'node:zlib';
 import { buildCoverageScope } from './coverage-scope.mjs';
-import { assertFreshCheckout, encodeJsonBody, pendingBatches, retryableTelemetryRejection, selectCoverage, supportsGzipTelemetry, validateCoverageSummary } from './sync-agent.mjs';
+import { assertFreshCheckout, encodeJsonBody, pendingBatches, retryableTelemetryRejection, selectCoverage, supportsFindingRevisions, supportsGzipTelemetry, validateCoverageSummary } from './sync-agent.mjs';
 
 test('coverage scope follows NFS includes and reports unavailable headers', async () => {
   const root = mkdtempSync(path.join(tmpdir(), 'hivemind-scope-'));
@@ -44,6 +44,8 @@ test('coverage upload excludes files outside the knfsd scope', () => {
 test('telemetry compression is capability-gated and preserves the JSON body', async () => {
   assert.equal(supportsGzipTelemetry({ telemetry: { content_encodings: ['identity', 'gzip'] } }), true);
   assert.equal(supportsGzipTelemetry({ ok: true }), false);
+  assert.equal(supportsFindingRevisions({ exchange: { finding_revisions: true } }), true);
+  assert.equal(supportsFindingRevisions({ ok: true }), false);
   const payload = { coverage_json: 'x'.repeat(100_000) };
   const encoded = await encodeJsonBody(payload, true);
   assert.equal(encoded.headers['Content-Encoding'], 'gzip');

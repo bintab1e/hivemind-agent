@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { isIP } from 'node:net';
 import { gzip } from 'node:zlib';
-import { parseLcov } from './contract.mjs';
+import { parseLcov, readFrontMatter } from './contract.mjs';
 import { buildCoverageScope } from './coverage-scope.mjs';
 
 const run = promisify(execFile);
@@ -105,6 +105,10 @@ export function supportsGzipTelemetry(health) {
   return health?.telemetry?.content_encodings?.includes('gzip') === true;
 }
 
+export function supportsFindingRevisions(health) {
+  return health?.exchange?.finding_revisions === true;
+}
+
 export function retryableTelemetryRejection(error) {
   return /^\/v1\/telemetry\/batches: (400 Invalid batch content|413 (Request too large|coverage\.json is too large))$/.test(error || '');
 }
@@ -134,6 +138,7 @@ export async function syncExchange(config, token) {
   const ackFolder = path.join(config.home, 'exchange', 'ack', config.agent_id);
   await fs.mkdir(folder, { recursive: true });
   await fs.mkdir(ackFolder, { recursive: true });
+  let health;
   for (const entry of (await fs.readdir(folder, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
     const file = path.join(folder, entry.name);
@@ -147,6 +152,14 @@ export async function syncExchange(config, token) {
     const ack = path.join(ackFolder, `${hash(`${sourcePath}\0${sha256}`)}.json`);
     if (await fs.stat(ack).catch(() => null)) continue;
     try {
+      const event = readFrontMatter(markdown).data;
+      if (event.kind === 'finding' && event.corrects_event_id) {
+        health ||= await syncHealth(config, token);
+        if (!supportsFindingRevisions(health)) {
+          console.error(`${entry.name}: waiting for server capability: finding_revisions`);
+          continue;
+        }
+      }
       const result = await post(config, token, '/v1/exchange/events', { agent_id: config.agent_id, source_path: sourcePath, markdown, sha256 });
       await fs.writeFile(ack, JSON.stringify({ source_path: sourcePath, sha256, result, at: timestamp() }, null, 2));
       console.log(`Event accepted: ${entry.name} → ${result.event_id}`);

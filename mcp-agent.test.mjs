@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { hash, validateEvent } from './contract.mjs';
+import { hash, userspacePocError, validateEvent } from './contract.mjs';
 import { handleMessage } from './mcp-agent.mjs';
 
 test('local MCP sends a direct PoC/KASAN finding without a support event', async t => {
@@ -19,11 +19,13 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   execFileSync('git', ['-C', root, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'source'], { stdio: 'ignore' });
   const commit = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const received = [];
+  let findingRevisions = true;
   const server = createServer(async (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/v1/sync/health') return res.end(JSON.stringify({ ok: true, exchange: { finding_revisions: findingRevisions } }));
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    res.setHeader('Content-Type', 'application/json');
     if (req.url === '/mcp') return res.end(JSON.stringify({ result: { structuredContent: { matches: [] } } }));
     const event = validateEvent(body);
     received.push(event.data);
@@ -36,6 +38,7 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   const invoke = (name, args) => handleMessage(config, 'a'.repeat(64), { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } });
   const listed = await handleMessage(config, 'a'.repeat(64), { jsonrpc: '2.0', id: 1, method: 'tools/list' });
   assert(!listed.result.tools.some(tool => tool.name === 'queue_analysis' || tool.name === 'get_recent_analyses'));
+  assert(listed.result.tools.some(tool => tool.name === 'queue_finding_revision'));
   assert.match(listed.result.tools.find(tool => tool.name === 'queue_verification').inputSchema.properties.body.description, /한국어/);
   const common = { title: 'NFSD boundary handling', scope: ['fs/nfsd/'], code_refs: ['fs/nfsd/nfs4proc.c#nfsd4_open'], angle: 'runtime-reproduction', body: '## 근거\n동일 커밋에서 재현했다.' };
   const hypothesis = (await invoke('queue_hypothesis', { ...common, claim_key: 'nfsd-boundary', verification_plan: 'PoC를 실행한다', preflight: 'checked' })).result.structuredContent;
@@ -63,9 +66,33 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   const dirtyFinding = (await invoke('queue_finding', findingArgs)).result;
   assert.equal(dirtyFinding.isError, true);
   assert.match(dirtyFinding.content[0].text, /깨끗한 커널 소스/);
-  assert.deepEqual(received.map(item => item.kind), ['hypothesis', 'verification', 'finding']);
+  execFileSync('git', ['-C', root, 'restore', 'poc.c']);
+  await writeFile(path.join(root, 'poc-v2.c'), 'int main(void) { return 2; }\n');
+  await writeFile(path.join(root, 'kasan-v2.log'), 'BUG: KASAN: use-after-free in nfsd4_open\nWrite of size 4 at addr deadbeef\n');
+  const revision = (await invoke('queue_finding_revision', { ...findingArgs, title: 'NFSD corrected finding', body: '## 정정 근거\nPoC와 보고 원문을 다시 확인했다.', corrects_event_id: finding.event_id, reproduction_command: '/usr/bin/gcc -o poc-v2 poc-v2.c && ./poc-v2', poc_path: 'poc-v2.c', kasan_path: 'kasan-v2.log' })).result.structuredContent;
+  assert.equal(revision.accepted, true);
+  assert.equal(revision.corrects_event_id, finding.event_id);
+  findingRevisions = false;
+  const unsupportedRevision = (await invoke('queue_finding_revision', { ...findingArgs, corrects_event_id: revision.event_id, poc_path: 'poc-v2.c', kasan_path: 'kasan-v2.log' })).result;
+  assert.equal(unsupportedRevision.isError, true);
+  assert.match(unsupportedRevision.content[0].text, /서버를 먼저 업데이트/);
+  assert.deepEqual(received.map(item => item.kind), ['hypothesis', 'verification', 'finding', 'finding']);
   assert.equal(received[2].evidence_event_ids, undefined);
   assert.deepEqual(received[2].access_requirements, ['auth_null']);
   assert.deepEqual(received[2].verified_impacts, ['kasan_write']);
+  assert.equal(received[3].corrects_event_id, finding.event_id);
   assert.match(await readFile(finding.file, 'utf8'), /BUG: KASAN:/);
+  assert.match(await readFile(revision.file, 'utf8'), /return 2/);
+});
+
+test('standalone PoC validation accepts common compiler and build-tool forms', () => {
+  const source = 'int main(void) { return 0; }\n';
+  for (const command of [
+    '/usr/bin/gcc -o poc poc.c && ./poc',
+    'x86_64-linux-gnu-gcc -o poc poc.c && ./poc',
+    'CC=clang make poc && ./poc',
+    'cmake --build build && ./build/poc',
+    'ninja -C build poc && ./build/poc',
+  ]) assert.equal(userspacePocError(source, command), null, command);
+  assert.match(userspacePocError(source, './poc'), /컴파일/);
 });

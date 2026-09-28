@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { evidenceLimits, verifiedImpactTypes, accessRequirementTypes, mcpTools, validateEvent } from './contract.mjs';
-import { gitArgs, validateConfig } from './sync-agent.mjs';
+import { gitArgs, supportsFindingRevisions, validateConfig } from './sync-agent.mjs';
 
 const run = promisify(execFile);
 const sha256 = text => createHash('sha256').update(text).digest('hex');
@@ -18,13 +18,32 @@ const common = {
   body: { type: 'string', maxLength: 240000, description: '관찰, 근거, 미확인 사항을 구분한 Markdown 본문. 가설·검증·취약점 보고는 한국어로 작성하고 코드 식별자·경로·명령 원문은 그대로 둘 수 있다.' },
 };
 const schema = (properties, required) => ({ type: 'object', properties: { ...common, ...properties }, required: ['title', 'scope', 'angle', 'body', ...required], additionalProperties: false });
+const findingProperties = {
+  finding_of: { type: 'string', description: '취약점 발견으로 이어진 가설 ID' },
+  file_path: { type: 'string', description: '취약점이 있는 저장소 상대 파일 경로. 예: fs/nfsd/nfs4proc.c' },
+  evidence_event_ids: { type: 'array', items: { type: 'string' }, description: '선택 사항: 연결할 현재 커밋의 검증 이벤트 ID' },
+  access_requirements: { type: 'array', items: { type: 'string', enum: accessRequirementTypes }, minItems: 1, maxItems: accessRequirementTypes.length, uniqueItems: true, description: '재현에 필요한 접근 또는 권한 조건. 여러 조건이면 모두 선택' },
+  verified_impacts: { type: 'array', items: { type: 'string', enum: verifiedImpactTypes }, minItems: 1, maxItems: verifiedImpactTypes.length, uniqueItems: true, description: 'PoC·KASAN 또는 실제 결과로 직접 확인한 항목만 선택. 가능성이나 추정은 제외' },
+  impact: { type: 'string', maxLength: 1000, description: '한국어로 작성한, 실제 확인된 영향과 아직 확인하지 못한 영향을 구분한 설명' },
+  poc_path: { type: 'string', description: 'main 함수가 있는 독립 사용자 공간 C 소스(.c). 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' },
+  kasan_path: { type: 'string', description: 'PoC 실행에서 얻은 BUG: KASAN 로그 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' },
+  reproduction_command: { type: 'string', maxLength: 1000, description: 'C PoC 컴파일과 실행을 포함하고 커널 패치 적용은 포함하지 않는 재현 명령' },
+};
+const findingRequired = ['code_refs', 'finding_of', 'file_path', 'access_requirements', 'verified_impacts', 'impact', 'poc_path', 'kasan_path', 'reproduction_command'];
 const localTools = [
   { name: 'queue_hypothesis', description: '한국어 Markdown 본문과 검증 계획, 코드 위치, 현재 커밋을 담은 가설을 검색 후 서버에 즉시 전송한다. 제목은 영어도 허용한다. 같은 커밋의 폐기 가설이 있으면 재등록·재검증하지 않는다.', inputSchema: schema({ claim_key: { type: 'string' }, verification_plan: { type: 'string', maxLength: 1000, description: '한국어로 작성한, 다른 에이전트가 실행할 수 있는 구체적인 확인 방법' }, preflight: { type: 'string', enum: ['checked', 'unavailable'] }, related_hypothesis_id: { type: 'string' } }, ['code_refs', 'claim_key', 'verification_plan', 'preflight']) },
   { name: 'queue_verification', description: '기존 가설의 반례 또는 미결 결과를 한국어 Markdown 본문과 검증 방법, 코드 위치와 함께 즉시 보낸다. 제목은 영어도 허용한다. PoC·KASAN이 있으면 queue_finding을 쓴다.', inputSchema: schema({ verification_of: { type: 'string' }, method: { type: 'string', maxLength: 300, description: '한국어로 작성한 검증 방법' }, verdict: { type: 'string', enum: ['refutes', 'inconclusive'] }, prior_exposure: { type: 'string', enum: ['none', 'claim_only', 'summary', 'full'] }, based_on_event_ids: { type: 'array', items: { type: 'string' } } }, ['code_refs', 'verification_of', 'method', 'verdict', 'prior_exposure', 'based_on_event_ids']) },
-  { name: 'queue_finding', description: '깨끗한 대상 소스에서 외부 입력으로 실제 버그를 재현한 독립 사용자 공간 C PoC와 해당 실행의 KASAN 로그만 보고한다. 커널 diff, initcall, 모듈, KUnit 또는 커널 내부 하네스는 취약점 PoC가 아니다. 한국어 본문, 접근 조건, 검증된 영향 분류를 사용하고 가능성만 있는 영향은 제외한다.', inputSchema: schema({ finding_of: { type: 'string', description: '취약점 발견으로 이어진 가설 ID' }, file_path: { type: 'string', description: '취약점이 있는 저장소 상대 파일 경로. 예: fs/nfsd/nfs4proc.c' }, evidence_event_ids: { type: 'array', items: { type: 'string' }, description: '선택 사항: 연결할 현재 커밋의 검증 이벤트 ID' }, access_requirements: { type: 'array', items: { type: 'string', enum: accessRequirementTypes }, minItems: 1, maxItems: accessRequirementTypes.length, uniqueItems: true, description: '재현에 필요한 접근 또는 권한 조건. 여러 조건이면 모두 선택' }, verified_impacts: { type: 'array', items: { type: 'string', enum: verifiedImpactTypes }, minItems: 1, maxItems: verifiedImpactTypes.length, uniqueItems: true, description: 'PoC·KASAN 또는 실제 결과로 직접 확인한 항목만 선택. 가능성이나 추정은 제외' }, impact: { type: 'string', maxLength: 1000, description: '한국어로 작성한, 실제 확인된 영향과 아직 확인하지 못한 영향을 구분한 설명' }, poc_path: { type: 'string', description: 'main 함수가 있는 독립 사용자 공간 C 소스(.c). 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, kasan_path: { type: 'string', description: 'PoC 실행에서 얻은 BUG: KASAN 로그 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, reproduction_command: { type: 'string', maxLength: 1000, description: 'C PoC 컴파일과 실행을 포함하고 커널 패치 적용은 포함하지 않는 재현 명령' } }, ['code_refs', 'finding_of', 'file_path', 'access_requirements', 'verified_impacts', 'impact', 'poc_path', 'kasan_path', 'reproduction_command']) },
+  { name: 'queue_finding', description: '깨끗한 대상 소스에서 외부 입력으로 실제 버그를 재현한 독립 사용자 공간 C PoC와 해당 실행의 KASAN 로그만 보고한다. 커널 diff, initcall, 모듈, KUnit 또는 커널 내부 하네스는 취약점 PoC가 아니다. 한국어 본문, 접근 조건, 검증된 영향 분류를 사용하고 가능성만 있는 영향은 제외한다.', inputSchema: schema(findingProperties, findingRequired) },
+  { name: 'queue_finding_revision', description: '이미 수락된 취약점 보고의 본문, PoC 또는 KASAN을 고친 수정본을 새 불변 finding으로 제출한다. corrects_event_id의 기존 보고는 수정본이 서버에 수락된 뒤 현재 목록에서 대체되며 원문 이력은 보존된다.', inputSchema: schema({ corrects_event_id: { type: 'string', pattern: '^[a-fA-F0-9]{64}$', description: '대체할 기존 finding 이벤트 ID' }, ...findingProperties }, ['corrects_event_id', ...findingRequired]) },
   { name: 'queue_correction', description: '수락된 기록을 덮어쓰지 않고 정정 이벤트를 새 outbox Markdown으로 저장한다.', inputSchema: schema({ corrects_event_id: { type: 'string' } }, ['corrects_event_id']) },
 ];
-const localKinds = new Map(localTools.map(tool => [tool.name, tool.name.slice('queue_'.length)]));
+const localKinds = new Map([
+  ['queue_hypothesis', 'hypothesis'],
+  ['queue_verification', 'verification'],
+  ['queue_finding', 'finding'],
+  ['queue_finding_revision', 'finding'],
+  ['queue_correction', 'correction'],
+]);
 
 function markdownFor(config, kind, args, commit) {
   const fields = {
@@ -58,7 +77,7 @@ async function readEvidence(config, source, label, maxBytes) {
 }
 
 export async function queueRecord(config, kind, args, commit) {
-  if (!localKinds.has(`queue_${kind}`) || !args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid record');
+  if (![...localKinds.values()].includes(kind) || !args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Invalid record');
   for (const key of ['title', 'angle', 'body']) if (typeof args[key] !== 'string' || !args[key].trim()) throw new Error(`Invalid ${key}`);
   if (!/^[a-f0-9]{40,64}$/i.test(commit)) throw new Error('Invalid Git commit');
   const name = `${new Date().toISOString().replace(/[-:.]/g, '')}-${randomBytes(8).toString('hex')}.md`;
@@ -77,7 +96,7 @@ export async function queueRecord(config, kind, args, commit) {
     throw error;
   }
   const eventId = sha256(`${config.version_id}\0${config.agent_id}\0${sourcePath}`);
-  return { queued: true, event_id: eventId, hypothesis_id: kind === 'hypothesis' ? `H-${eventId.slice(0, 12)}` : args.verification_of || args.finding_of || null, source_path: sourcePath, file: finalPath, version_id: config.version_id, repo_commit: commit };
+  return { queued: true, event_id: eventId, hypothesis_id: kind === 'hypothesis' ? `H-${eventId.slice(0, 12)}` : args.verification_of || args.finding_of || null, corrects_event_id: args.corrects_event_id || null, source_path: sourcePath, file: finalPath, version_id: config.version_id, repo_commit: commit };
 }
 
 async function sendRecord(config, token, queued) {
@@ -118,6 +137,15 @@ async function remoteMcp(config, token, name, args) {
   return message.result;
 }
 
+async function serverHealth(config, token) {
+  const response = await fetch(`${config.server}/v1/sync/health`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) throw new Error(`Central health returned ${response.status}`);
+  return response.json();
+}
+
 export async function handleMessage(config, token, message) {
   if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') return { jsonrpc: '2.0', id: message?.id ?? null, error: { code: -32600, message: 'Invalid Request' } };
   if (!Object.hasOwn(message, 'id')) return null;
@@ -131,6 +159,10 @@ export async function handleMessage(config, token, message) {
   if (!mcpTools.some(tool => tool.name === name) && !localKinds.has(name)) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: 'Unknown tool' } };
   try {
     if (mcpTools.some(tool => tool.name === name)) return answer(await remoteMcp(config, token, name, args));
+    if (name === 'queue_finding_revision') {
+      const health = await serverHealth(config, token);
+      if (!supportsFindingRevisions(health)) throw new Error('중앙 서버가 finding 수정본을 아직 지원하지 않습니다. 서버를 먼저 업데이트하세요.');
+    }
     const { stdout } = await run('git', gitArgs(config.repo_root, ['rev-parse', 'HEAD']), { cwd: config.repo_root });
     const commit = stdout.trim();
     let matches = [], searchWarning;
@@ -147,7 +179,7 @@ export async function handleMessage(config, token, message) {
       }
     }
     let recordArgs = args;
-    if (name === 'queue_finding') {
+    if (name === 'queue_finding' || name === 'queue_finding_revision') {
       if (typeof args.poc_path !== 'string' || path.extname(args.poc_path).toLowerCase() !== '.c') throw new Error('PoC는 .c 확장자의 독립 사용자 공간 C 소스여야 합니다');
       const { stdout: trackedStatus } = await run('git', gitArgs(config.repo_root, ['status', '--porcelain=v1', '-z', '--untracked-files=no']), { cwd: config.repo_root });
       if (trackedStatus) throw new Error('취약점 보고 전에 대상 저장소의 추적 파일 변경을 모두 되돌려 깨끗한 커널 소스에서 재현해야 합니다');
