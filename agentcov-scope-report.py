@@ -82,23 +82,28 @@ def main() -> int:
     args.lcov.parent.mkdir(parents=True, exist_ok=True)
     write_lcov(coverage, out=args.lcov, counts="binary")
 
-    # Per-line attribution repeats the same event metadata for every line in a
-    # range and made this checkout's scoped report exceed 50 MB.  The complete
-    # read/search ranges retain that evidence and can reconstruct the omitted
-    # derived line map without losing commands, sessions, timestamps, or counts.
-    for file_coverage in coverage["files"].values():
-        file_coverage.pop("lines", None)
-    coverage["hivemind_compaction"] = {
-        "schema_version": 1,
-        "omitted": ["files.*.lines"],
-        "reconstruct_from": ["files.*.read_ranges", "files.*.search_seen_ranges"],
+    # The server derives its per-file and per-line coverage from the LCOV above.
+    # Agentcov's files.*.read_ranges and search_seen_ranges repeat event details
+    # hundreds of thousands of times and eventually exceed the telemetry limit.
+    # Keep the native event log locally as the detailed source of truth and send
+    # only the summary and scope metadata that are not represented by LCOV.
+    transfer = {
+        key: coverage[key]
+        for key in ("schema_version", "tool", "git", "summary")
+        if key in coverage
     }
-    coverage["hivemind_scope"] = {
+    transfer["hivemind_compaction"] = {
+        "schema_version": 2,
+        "omitted": ["files", "sessions", "unknown_events"],
+        "coverage_source": "agentcov.info",
+        "detail_source": ".agentcov/events.jsonl",
+    }
+    transfer["hivemind_scope"] = {
         "kind": "include_closure",
         "files": len(scope),
         "missing_includes": missing_includes,
     }
-    write_json_atomic(coverage, args.json)
+    write_json_atomic(transfer, args.json)
     write_json_atomic(
         {
             "files": coverage["summary"]["files"],
