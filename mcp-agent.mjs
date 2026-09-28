@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { evidenceLimits, mcpTools, validateEvent } from './contract.mjs';
+import { evidenceLimits, verifiedImpactTypes, mcpTools, validateEvent } from './contract.mjs';
 import { gitArgs, validateConfig } from './sync-agent.mjs';
 
 const run = promisify(execFile);
@@ -21,7 +21,7 @@ const schema = (properties, required) => ({ type: 'object', properties: { ...com
 const localTools = [
   { name: 'queue_hypothesis', description: '한국어 Markdown 본문과 검증 계획, 코드 위치, 현재 커밋을 담은 가설을 검색 후 서버에 즉시 전송한다. 제목은 영어도 허용한다. 같은 커밋의 폐기 가설이 있으면 재등록·재검증하지 않는다.', inputSchema: schema({ claim_key: { type: 'string' }, verification_plan: { type: 'string', maxLength: 1000, description: '한국어로 작성한, 다른 에이전트가 실행할 수 있는 구체적인 확인 방법' }, preflight: { type: 'string', enum: ['checked', 'unavailable'] }, related_hypothesis_id: { type: 'string' } }, ['code_refs', 'claim_key', 'verification_plan', 'preflight']) },
   { name: 'queue_verification', description: '기존 가설의 반례 또는 미결 결과를 한국어 Markdown 본문과 검증 방법, 코드 위치와 함께 즉시 보낸다. 제목은 영어도 허용한다. PoC·KASAN이 있으면 queue_finding을 쓴다.', inputSchema: schema({ verification_of: { type: 'string' }, method: { type: 'string', maxLength: 300, description: '한국어로 작성한 검증 방법' }, verdict: { type: 'string', enum: ['refutes', 'inconclusive'] }, prior_exposure: { type: 'string', enum: ['none', 'claim_only', 'summary', 'full'] }, based_on_event_ids: { type: 'array', items: { type: 'string' } } }, ['code_refs', 'verification_of', 'method', 'verdict', 'prior_exposure', 'based_on_event_ids']) },
-  { name: 'queue_finding', description: '가설을 직접 테스트해 실제 PoC와 해당 실행의 KASAN 로그를 얻었다면 한국어 Markdown 본문과 영향 설명으로 즉시 보고한다. 제목은 영어도 허용하고 PoC·KASAN 원문은 보존한다. 지지 검증 기록은 필요하지 않다.', inputSchema: schema({ finding_of: { type: 'string', description: '취약점 발견으로 이어진 가설 ID' }, file_path: { type: 'string', description: '취약점이 있는 저장소 상대 파일 경로. 예: fs/nfsd/nfs4proc.c' }, evidence_event_ids: { type: 'array', items: { type: 'string' }, description: '선택 사항: 연결할 현재 커밋의 검증 이벤트 ID' }, impact: { type: 'string', maxLength: 1000, description: '한국어로 작성한, KASAN으로 관찰한 문제의 보안 영향' }, poc_path: { type: 'string', description: '실제 PoC 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, kasan_path: { type: 'string', description: 'PoC 실행에서 얻은 BUG: KASAN 로그 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, reproduction_command: { type: 'string', maxLength: 1000, description: '해당 PoC로 KASAN을 재현한 명령' } }, ['code_refs', 'finding_of', 'file_path', 'impact', 'poc_path', 'kasan_path', 'reproduction_command']) },
+  { name: 'queue_finding', description: '가설을 직접 테스트해 실제 PoC와 해당 실행의 KASAN 로그를 얻었다면 한국어 요약·본문과 검증된 영향 분류로 즉시 보고한다. 가능성만 있는 영향은 verified_impacts에 넣지 않는다. 제목은 영어도 허용하고 PoC·KASAN 원문은 보존한다.', inputSchema: schema({ finding_of: { type: 'string', description: '취약점 발견으로 이어진 가설 ID' }, file_path: { type: 'string', description: '취약점이 있는 저장소 상대 파일 경로. 예: fs/nfsd/nfs4proc.c' }, evidence_event_ids: { type: 'array', items: { type: 'string' }, description: '선택 사항: 연결할 현재 커밋의 검증 이벤트 ID' }, summary: { type: 'string', maxLength: 240, description: '실제로 재현한 결과를 한 문장으로 요약한 한국어 설명' }, verified_impacts: { type: 'array', items: { type: 'string', enum: verifiedImpactTypes }, minItems: 1, maxItems: verifiedImpactTypes.length, uniqueItems: true, description: 'PoC·KASAN 또는 실제 결과로 직접 확인한 항목만 선택. 가능성이나 추정은 제외' }, impact: { type: 'string', maxLength: 1000, description: '한국어로 작성한, 실제 확인된 영향과 아직 확인하지 못한 영향을 구분한 설명' }, poc_path: { type: 'string', description: '실제 PoC 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, kasan_path: { type: 'string', description: 'PoC 실행에서 얻은 BUG: KASAN 로그 파일. 저장소 상대경로 또는 저장소/에이전트 home 아래 절대경로' }, reproduction_command: { type: 'string', maxLength: 1000, description: '해당 PoC로 KASAN을 재현한 명령' } }, ['code_refs', 'finding_of', 'file_path', 'summary', 'verified_impacts', 'impact', 'poc_path', 'kasan_path', 'reproduction_command']) },
   { name: 'queue_correction', description: '수락된 기록을 덮어쓰지 않고 정정 이벤트를 새 outbox Markdown으로 저장한다.', inputSchema: schema({ corrects_event_id: { type: 'string' } }, ['corrects_event_id']) },
 ];
 const localKinds = new Map(localTools.map(tool => [tool.name, tool.name.slice('queue_'.length)]));
@@ -32,7 +32,7 @@ function markdownFor(config, kind, args, commit) {
     title: args.title, scope: args.scope, angle: args.angle,
     created_at: new Date().toISOString(),
   };
-  for (const key of ['code_refs', 'claim_key', 'verification_plan', 'preflight', 'related_hypothesis_id', 'verification_of', 'method', 'verdict', 'prior_exposure', 'based_on_event_ids', 'finding_of', 'file_path', 'evidence_event_ids', 'impact', 'reproduction_command', 'poc_source', 'poc_sha256', 'kasan_log', 'kasan_sha256', 'corrects_event_id']) {
+  for (const key of ['code_refs', 'claim_key', 'verification_plan', 'preflight', 'related_hypothesis_id', 'verification_of', 'method', 'verdict', 'prior_exposure', 'based_on_event_ids', 'finding_of', 'file_path', 'evidence_event_ids', 'summary', 'verified_impacts', 'impact', 'reproduction_command', 'poc_source', 'poc_sha256', 'kasan_log', 'kasan_sha256', 'corrects_event_id']) {
     if (args[key] !== undefined) fields[key] = args[key];
   }
   const lines = Object.entries(fields).flatMap(([key, value]) => Array.isArray(value)

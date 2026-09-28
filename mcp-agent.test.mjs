@@ -13,7 +13,7 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   const home = path.join(root, '.hivemind', 'agent', 'runtime');
   await mkdir(home, { recursive: true });
   await writeFile(path.join(root, 'poc.c'), 'int main(void) { return 0; }\n');
-  await writeFile(path.join(root, 'kasan.log'), 'BUG: KASAN: use-after-free in nfsd4_open\n');
+  await writeFile(path.join(root, 'kasan.log'), 'BUG: KASAN: use-after-free in nfsd4_open\nWrite of size 8 at addr deadbeef\n');
   execFileSync('git', ['init', root], { stdio: 'ignore' });
   execFileSync('git', ['-C', root, 'add', 'poc.c'], { stdio: 'ignore' });
   execFileSync('git', ['-C', root, '-c', 'user.name=test', '-c', 'user.email=test@example.com', 'commit', '-m', 'source'], { stdio: 'ignore' });
@@ -42,7 +42,7 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   assert.equal(hypothesis.accepted, true);
   const verification = (await invoke('queue_verification', { ...common, verification_of: hypothesis.hypothesis_id, method: '경계값으로 독립 재현했다', verdict: 'refutes', prior_exposure: 'claim_only', based_on_event_ids: [] })).result.structuredContent;
   assert.equal(verification.accepted, true);
-  const finding = (await invoke('queue_finding', { ...common, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', impact: '메모리 오류', reproduction_command: './poc', poc_path: 'poc.c', kasan_path: 'kasan.log' })).result.structuredContent;
+  const finding = (await invoke('queue_finding', { ...common, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', summary: '경계 밖 8바이트 쓰기를 재현했다.', verified_impacts: ['kasan_write'], impact: '메모리 오류를 확인했으며 코드 실행은 확인하지 못했다.', reproduction_command: './poc', poc_path: 'poc.c', kasan_path: 'kasan.log' })).result.structuredContent;
   assert.equal(finding.accepted, true);
   const english = { ...common, body: '## Evidence\nObserved the same code path.' };
   const invalidHypothesis = (await invoke('queue_hypothesis', { ...english, claim_key: 'english-hypothesis', verification_plan: 'Run a boundary input', preflight: 'checked' })).result;
@@ -51,10 +51,12 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   const invalidVerification = (await invoke('queue_verification', { ...english, verification_of: hypothesis.hypothesis_id, method: 'Static trace', verdict: 'inconclusive', prior_exposure: 'claim_only', based_on_event_ids: [] })).result;
   assert.equal(invalidVerification.isError, true);
   assert.match(invalidVerification.content[0].text, /한국어/);
-  const invalidFinding = (await invoke('queue_finding', { ...english, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', impact: 'Memory corruption', reproduction_command: './poc', poc_path: 'poc.c', kasan_path: 'kasan.log' })).result;
+  const invalidFinding = (await invoke('queue_finding', { ...english, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', summary: '경계 밖 쓰기를 재현했다.', verified_impacts: ['kasan_write'], impact: 'Memory corruption', reproduction_command: './poc', poc_path: 'poc.c', kasan_path: 'kasan.log' })).result;
   assert.equal(invalidFinding.isError, true);
   assert.match(invalidFinding.content[0].text, /한국어/);
   assert.deepEqual(received.map(item => item.kind), ['hypothesis', 'verification', 'finding']);
   assert.equal(received[2].evidence_event_ids, undefined);
+  assert.equal(received[2].summary, '경계 밖 8바이트 쓰기를 재현했다.');
+  assert.deepEqual(received[2].verified_impacts, ['kasan_write']);
   assert.match(await readFile(finding.file, 'utf8'), /BUG: KASAN:/);
 });

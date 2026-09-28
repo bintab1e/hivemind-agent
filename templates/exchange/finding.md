@@ -11,6 +11,9 @@ scope:
 code_refs:
   - "fs/nfsd/nfs4proc.c#nfsd4_open"
 angle: runtime-reproduction
+summary: "실제로 재현한 결과를 한 문장으로 설명"
+verified_impacts:
+  - "kasan_write"
 impact: "문제가 성립할 때 발생하는 보안 영향"
 reproduction_command: "PoC를 실행해 KASAN 로그를 얻은 명령"
 poc_source: "PoC 파일의 UTF-8 원문을 JSON 문자열로 인코딩"
@@ -30,4 +33,4 @@ created_at: "YYYY-MM-DDTHH:MM:SSZ"
 
 ## 영향과 한계
 
-영향 범위와 아직 확인하지 못한 조건을 구분한다. 보고만으로 최종 확정되지 않는다.
+`verified_impacts`에는 PoC·KASAN 또는 실제 결과로 직접 확인한 항목만 넣는다. 허용값은 `kasan_read`, `kasan_write`, `controlled_read`, `controlled_write`, `rce`, `lpe`, `info_leak`이다. 가능성이나 후속 발전 가능성만 있는 항목은 제외하고, 영향 범위와 아직 확인하지 못한 조건을 본문에서 구분한다.
