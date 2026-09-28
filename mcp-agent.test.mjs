@@ -42,7 +42,8 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   assert.equal(hypothesis.accepted, true);
   const verification = (await invoke('queue_verification', { ...common, verification_of: hypothesis.hypothesis_id, method: '경계값으로 독립 재현했다', verdict: 'refutes', prior_exposure: 'claim_only', based_on_event_ids: [] })).result.structuredContent;
   assert.equal(verification.accepted, true);
-  const finding = (await invoke('queue_finding', { ...common, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', access_requirements: ['auth_null'], verified_impacts: ['kasan_write'], impact: '메모리 오류를 확인했으며 코드 실행은 확인하지 못했다.', reproduction_command: './poc', poc_path: 'poc.c', kasan_path: 'kasan.log' })).result.structuredContent;
+  const findingArgs = { ...common, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', access_requirements: ['auth_null'], verified_impacts: ['kasan_write'], impact: '메모리 오류를 확인했으며 코드 실행은 확인하지 못했다.', reproduction_command: 'cc -o poc poc.c && ./poc', poc_path: 'poc.c', kasan_path: 'kasan.log' };
+  const finding = (await invoke('queue_finding', findingArgs)).result.structuredContent;
   assert.equal(finding.accepted, true);
   const english = { ...common, body: '## Evidence\nObserved the same code path.' };
   const invalidHypothesis = (await invoke('queue_hypothesis', { ...english, claim_key: 'english-hypothesis', verification_plan: 'Run a boundary input', preflight: 'checked' })).result;
@@ -51,9 +52,17 @@ test('local MCP sends a direct PoC/KASAN finding without a support event', async
   const invalidVerification = (await invoke('queue_verification', { ...english, verification_of: hypothesis.hypothesis_id, method: 'Static trace', verdict: 'inconclusive', prior_exposure: 'claim_only', based_on_event_ids: [] })).result;
   assert.equal(invalidVerification.isError, true);
   assert.match(invalidVerification.content[0].text, /한국어/);
-  const invalidFinding = (await invoke('queue_finding', { ...english, finding_of: hypothesis.hypothesis_id, file_path: 'fs/nfsd/nfs4proc.c', access_requirements: ['auth_null'], verified_impacts: ['kasan_write'], impact: 'Memory corruption', reproduction_command: './poc', poc_path: 'poc.c', kasan_path: 'kasan.log' })).result;
+  const invalidFinding = (await invoke('queue_finding', { ...findingArgs, ...english, impact: 'Memory corruption' })).result;
   assert.equal(invalidFinding.isError, true);
   assert.match(invalidFinding.content[0].text, /한국어/);
+  await writeFile(path.join(root, 'kernel-patch.c'), 'diff --git a/fs/nfsd/nfs4proc.c b/fs/nfsd/nfs4proc.c\n--- a/fs/nfsd/nfs4proc.c\n+++ b/fs/nfsd/nfs4proc.c\n@@ -1 +1 @@\n');
+  const patchFinding = (await invoke('queue_finding', { ...findingArgs, reproduction_command: 'git apply kernel-patch.c && make', poc_path: 'kernel-patch.c' })).result;
+  assert.equal(patchFinding.isError, true);
+  assert.match(patchFinding.content[0].text, /커널 패치가 아닌 독립 실행형/);
+  await writeFile(path.join(root, 'poc.c'), 'int main(void) { return 1; }\n');
+  const dirtyFinding = (await invoke('queue_finding', findingArgs)).result;
+  assert.equal(dirtyFinding.isError, true);
+  assert.match(dirtyFinding.content[0].text, /깨끗한 커널 소스/);
   assert.deepEqual(received.map(item => item.kind), ['hypothesis', 'verification', 'finding']);
   assert.equal(received[2].evidence_event_ids, undefined);
   assert.deepEqual(received[2].access_requirements, ['auth_null']);
