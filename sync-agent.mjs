@@ -162,54 +162,84 @@ export async function syncExchange(config, token) {
   }
 }
 
-export async function pendingBatches(config, token, telemetry = {}) {
+export async function latestBatch(config) {
   const folder = path.join(config.home, 'telemetry', 'batches', config.agent_id);
-  const statePath = path.join(config.home, `sync-state-${config.agent_id}.json`);
   await fs.mkdir(folder, { recursive: true });
   const batches = [];
   for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
-    const batchFolder = path.join(folder, entry.name);
-    const manifest = JSON.parse(await fs.readFile(path.join(batchFolder, 'manifest.json'), 'utf8'));
-    batches.push({ name: entry.name, batchFolder, manifest });
-  }
-  batches.sort((a, b) => a.manifest.generated_at.localeCompare(b.manifest.generated_at));
-  for (const { name, batchFolder, manifest } of batches) {
-    if (await fs.stat(path.join(batchFolder, 'ack.json')).catch(() => null)) continue;
-    const rejectedPath = path.join(batchFolder, 'rejected.json');
-    const rejected = JSON.parse(await fs.readFile(rejectedPath, 'utf8').catch(() => 'null'));
-    if (rejected && !(telemetry.gzip && retryableTelemetryRejection(rejected.error))) continue;
-    const [lcov, coverageJson, progressMd] = await Promise.all([
-      fs.readFile(path.join(batchFolder, 'agentcov.info'), 'utf8'),
-      fs.readFile(path.join(batchFolder, 'coverage.json'), 'utf8'),
-      fs.readFile(path.join(batchFolder, 'progress.md'), 'utf8'),
-    ]);
-    try {
-      const result = await post(config, token, '/v1/telemetry/batches', { manifest, lcov, coverage_json: coverageJson, progress_md: progressMd }, { gzip: telemetry.gzip });
-      await fs.writeFile(statePath, JSON.stringify({ source_digest: manifest.source_digest, batch_id: manifest.batch_id, at: timestamp() }, null, 2));
-      await fs.writeFile(path.join(batchFolder, 'ack.json'), JSON.stringify({ result, at: timestamp() }, null, 2));
-      console.log(`Batch accepted: ${name}`);
-      if (result.warnings?.length) console.warn(`Batch ${name}: ${result.warnings.join(', ')}`);
-    } catch (error) {
-      if (!/^\/v1\/telemetry\/batches: (400|413|422) /.test(error.message)) throw error;
-      await fs.writeFile(path.join(batchFolder, 'rejected.json'), JSON.stringify({ error: error.message, at: timestamp() }, null, 2));
-      await fs.writeFile(statePath, JSON.stringify({ source_digest: manifest.source_digest, batch_id: manifest.batch_id, rejected: true, at: timestamp() }, null, 2));
-      console.error(`${name}: ${error.message}`);
+    const entryPath = path.join(folder, entry.name);
+    if (entry.isDirectory() && entry.name.startsWith('.creating-')) {
+      await fs.rm(entryPath, { recursive: true, force: true });
+      continue;
     }
+    if (!entry.isDirectory() || !/^[a-f0-9]{64}$/.test(entry.name)) continue;
+    const manifest = JSON.parse(await fs.readFile(path.join(entryPath, 'manifest.json'), 'utf8'));
+    batches.push({ name: entry.name, batchFolder: entryPath, manifest });
+  }
+  batches.sort((a, b) => a.manifest.generated_at.localeCompare(b.manifest.generated_at) || a.name.localeCompare(b.name));
+  const newest = batches.pop();
+  for (const batch of batches) await fs.rm(batch.batchFolder, { recursive: true, force: true });
+  return newest;
+}
+
+const syncState = (manifest, extra = {}) => ({
+  source_digest: manifest.source_digest,
+  batch_id: manifest.batch_id,
+  repo_root: manifest.repo_root,
+  repo_commit: manifest.repo_commit,
+  ...extra,
+  at: timestamp(),
+});
+
+export async function pendingBatches(config, token, telemetry = {}) {
+  const folder = path.join(config.home, 'telemetry', 'batches', config.agent_id);
+  const statePath = path.join(config.home, `sync-state-${config.agent_id}.json`);
+  const newest = await latestBatch(config);
+  if (!newest) return;
+  const { name, batchFolder, manifest } = newest;
+  if (await fs.stat(path.join(batchFolder, 'ack.json')).catch(() => null)) {
+    await fs.writeFile(statePath, JSON.stringify(syncState(manifest), null, 2));
+    return;
+  }
+  const rejectedPath = path.join(batchFolder, 'rejected.json');
+  const rejected = JSON.parse(await fs.readFile(rejectedPath, 'utf8').catch(() => 'null'));
+  if (rejected && !(telemetry.gzip && retryableTelemetryRejection(rejected.error))) {
+    await fs.writeFile(statePath, JSON.stringify(syncState(manifest, { rejected: true }), null, 2));
+    return;
+  }
+  const [lcov, coverageJson, progressMd] = await Promise.all([
+    fs.readFile(path.join(batchFolder, 'agentcov.info'), 'utf8'),
+    fs.readFile(path.join(batchFolder, 'coverage.json'), 'utf8'),
+    fs.readFile(path.join(batchFolder, 'progress.md'), 'utf8'),
+  ]);
+  try {
+    const result = await post(config, token, '/v1/telemetry/batches', { manifest, lcov, coverage_json: coverageJson, progress_md: progressMd }, { gzip: telemetry.gzip });
+    await fs.writeFile(statePath, JSON.stringify(syncState(manifest), null, 2));
+    await fs.writeFile(path.join(batchFolder, 'ack.json'), JSON.stringify({ result, at: timestamp() }, null, 2));
+    console.log(`Batch accepted: ${name}`);
+    if (result.warnings?.length) console.warn(`Batch ${name}: ${result.warnings.join(', ')}`);
+  } catch (error) {
+    if (!/^\/v1\/telemetry\/batches: (400|413|422) /.test(error.message)) throw error;
+    await fs.writeFile(path.join(batchFolder, 'rejected.json'), JSON.stringify({ error: error.message, at: timestamp() }, null, 2));
+    await fs.writeFile(statePath, JSON.stringify(syncState(manifest, { rejected: true }), null, 2));
+    console.error(`${name}: ${error.message}`);
   }
 }
 
 async function syncTelemetry(config, token, telemetry = {}) {
-  await pendingBatches(config, token, telemetry);
   const { stdout: commitText } = await run('git', gitArgs(config.repo_root, ['rev-parse', 'HEAD']), { cwd: config.repo_root });
   const commit = commitText.trim();
   const folder = path.join(config.home, 'telemetry', 'batches', config.agent_id);
   const statePath = path.join(config.home, `sync-state-${config.agent_id}.json`);
-  const state = JSON.parse(await fs.readFile(statePath, 'utf8').catch(() => '{}'));
-  if (state.batch_id) {
-    const prior = JSON.parse(await fs.readFile(path.join(folder, state.batch_id, 'manifest.json'), 'utf8'));
+  const initialState = JSON.parse(await fs.readFile(statePath, 'utf8').catch(() => '{}'));
+  if (initialState.batch_id) {
+    const prior = initialState.repo_root && initialState.repo_commit
+      ? initialState
+      : JSON.parse(await fs.readFile(path.join(folder, initialState.batch_id, 'manifest.json'), 'utf8').catch(() => 'null'));
     assertFreshCheckout(prior, config.repo_root, commit);
   }
+  await pendingBatches(config, token, telemetry);
+  const state = JSON.parse(await fs.readFile(statePath, 'utf8').catch(() => '{}'));
   const { files: scope, missingIncludes } = await buildCoverageScope(config.repo_root, config.coverage_prefixes);
   const { stdout: status } = await run('git', gitArgs(config.repo_root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']), { cwd: config.repo_root });
   const changed = status.split('\0').filter(Boolean).map(entry => entry.startsWith('?? ') || /^[ MARCUD?!]{2} /.test(entry) ? entry.slice(3) : entry);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -79,4 +79,41 @@ test('gzip-capable servers receive and acknowledge a previously rejected batch',
   await pendingBatches({ home, agent_id: 'pc1', server: `http://127.0.0.1:${server.address().port}` }, 'token', { gzip: true });
   assert.equal(received.coverage_json, '{"coverage":true}');
   assert.equal(JSON.parse(readFileSync(path.join(batchFolder, 'ack.json'), 'utf8')).result.accepted, true);
+});
+
+test('only the newest telemetry batch is retained and sent', async t => {
+  const home = mkdtempSync(path.join(tmpdir(), 'hivemind-latest-'));
+  const root = path.join(home, 'telemetry', 'batches', 'pc1');
+  const ids = ['a'.repeat(64), 'b'.repeat(64), 'c'.repeat(64)];
+  for (const [index, batchId] of ids.entries()) {
+    const folder = path.join(root, batchId);
+    mkdirSync(folder, { recursive: true });
+    const manifest = { batch_id: batchId, source_digest: `source-${index}`, repo_root: '/repo', repo_commit: 'd'.repeat(40), generated_at: `2026-09-27T00:0${index}:00Z` };
+    writeFileSync(path.join(folder, 'manifest.json'), JSON.stringify(manifest));
+    writeFileSync(path.join(folder, 'agentcov.info'), `lcov-${index}`);
+    writeFileSync(path.join(folder, 'coverage.json'), JSON.stringify({ coverage: index }));
+    writeFileSync(path.join(folder, 'progress.md'), `progress-${index}`);
+  }
+  mkdirSync(path.join(root, '.creating-stale'), { recursive: true });
+  let received;
+  const server = createServer((request, response) => {
+    const chunks = [];
+    request.on('data', chunk => chunks.push(chunk));
+    request.on('end', () => {
+      received = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ accepted: true, batch_id: received.manifest.batch_id, warnings: [] }));
+    });
+  }).listen(0, '127.0.0.1');
+  await new Promise(resolve => server.once('listening', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); rmSync(home, { recursive: true, force: true }); });
+  await pendingBatches({ home, agent_id: 'pc1', server: `http://127.0.0.1:${server.address().port}` }, 'token');
+  assert.equal(received.manifest.batch_id, ids[2]);
+  assert.equal(received.coverage_json, '{"coverage":2}');
+  assert.equal(existsSync(path.join(root, ids[0])), false);
+  assert.equal(existsSync(path.join(root, ids[1])), false);
+  assert.equal(existsSync(path.join(root, '.creating-stale')), false);
+  assert.equal(existsSync(path.join(root, ids[2], 'ack.json')), true);
+  const state = JSON.parse(readFileSync(path.join(home, 'sync-state-pc1.json'), 'utf8'));
+  assert.deepEqual([state.batch_id, state.repo_root, state.repo_commit], [ids[2], '/repo', 'd'.repeat(40)]);
 });
